@@ -1,9 +1,7 @@
 # app-watch
 
 App-watch watches application instances and runs a configured external command
-after confirmed shutdown. It supports Bisq 1 desktop/API daemon, Electrum client,
-and Wasabi GUI/daemon through separate process adapters. It extracts VaultKeep's
-trigger workflow without its backup engine or scheduling.
+after confirmed shutdown.
 
 App-watch observes a running instance before arming, confirms continuous absence,
 and saves a frozen command request before submitting an independent systemd
