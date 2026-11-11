@@ -1,0 +1,34 @@
+# Disabled template: replace paths with this installation's observed process identity.
+# Review every GUI/daemon writer; these entrypoints are not verified presets.
+config_version: 1
+job:
+  id: wasabi-main
+application:
+  name: wasabi
+  data_dir: ~/.walletwasabi/client
+  matcher:
+    entrypoints:
+      - kind: script
+        value: /opt/wasabi/WalletWasabi
+    argv_tokens: []
+    env_eq: {}
+action:
+  # Harmless example, not a backup: replace with your external command's argv.
+  argv: [/usr/bin/printf, '%s\n', 'wasabi shutdown confirmed']
+trigger:
+  enabled: false
+  poll_seconds: 2
+  confirm_seconds: 5
+  # deadline_seconds: 3600  # Advisory only; never terminates an action.
+  params: {}
+desktop_notifications:
+  command: notify-send
+  timeout_ms: 5000
+  trigger:
+    enabled: false
+# external_notifier:
+#   command: telegram-notify
+#   timeout_seconds: 15
+logging:
+  level: info
+  include_command_output: false

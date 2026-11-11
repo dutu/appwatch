@@ -1,0 +1,9 @@
+[Unit]
+Description=App-watch external command worker %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/app-watch --user trigger exec-worker %i
+Restart=no
+TimeoutStartSec=infinity
+UMask=0077

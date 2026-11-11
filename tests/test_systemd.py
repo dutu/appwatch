@@ -1,0 +1,235 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from app_watch.services.systemd import (
+    RealSystemdController,
+    SubmissionClass,
+    UnitState,
+    classify_submission,
+)
+
+
+def test_submission_accepted() -> None:
+    assert classify_submission(spawned=True, exit_code=0) is SubmissionClass.ACCEPTED
+
+
+def test_numeric_rejections_remain_uncertain() -> None:
+    for code in (4, 5, 6):
+        assert classify_submission(spawned=True, exit_code=code) is SubmissionClass.INCONCLUSIVE
+
+
+def test_invalid_argument_does_not_prove_non_submission() -> None:
+    result = classify_submission(spawned=True, exit_code=2)
+    assert result is SubmissionClass.INCONCLUSIVE
+
+
+def test_generic_failure_is_inconclusive() -> None:
+    for code in (1, 3, 7, 255):
+        assert classify_submission(spawned=True, exit_code=code) is SubmissionClass.INCONCLUSIVE
+
+
+def test_spawn_failure_is_rejection() -> None:
+    assert classify_submission(spawned=False, exit_code=None) is SubmissionClass.REJECTED
+
+
+def test_unit_state_pending() -> None:
+    assert UnitState("loaded", "activating", "start").is_active_or_pending()
+    assert UnitState("loaded", "active", "running").is_active_or_pending()
+    assert not UnitState("loaded", "inactive", "dead").is_active_or_pending()
+
+
+def test_real_start_timeout_is_inconclusive(monkeypatch) -> None:
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired("systemctl", 15)
+
+    monkeypatch.setattr(
+        "app_watch.services.systemd.subprocess.Popen",
+        lambda *args, **kwargs: SimpleNamespace(
+            communicate=timeout,
+            kill=lambda: None,
+            wait=lambda **kwargs: None,
+            stdout=None,
+            stderr=None,
+        ),
+    )
+    result = RealSystemdController().start_unit("fake.service")
+    assert result.classification is SubmissionClass.INCONCLUSIVE and result.spawned
+
+
+def test_real_spawn_failure_is_proven_rejection(monkeypatch) -> None:
+    def unavailable(*_args, **_kwargs):
+        raise FileNotFoundError("systemctl unavailable")
+
+    monkeypatch.setattr("app_watch.services.systemd.subprocess.Popen", unavailable)
+    result = RealSystemdController().start_unit("fake.service")
+    assert result.classification is SubmissionClass.REJECTED and not result.spawned
+
+
+def test_probe_timeout_logs_command_without_establishing_worker_absence(monkeypatch, caplog):
+    def timeout(argv, **_kwargs):
+        raise subprocess.TimeoutExpired(argv, 15)
+
+    monkeypatch.setattr("app_watch.services.systemd.subprocess.run", timeout)
+    assert RealSystemdController().unit_state("fake.service") is None
+    assert "systemd probe timed out after 15s" in caplog.text
+    assert "systemctl --user show" in caplog.text
+    assert "fake.service" in caplog.text
+
+
+@pytest.mark.parametrize("job,pending", [("", False), ("0", False), ("123", True)])
+def test_real_probe_includes_queued_job(monkeypatch, job: str, pending: bool) -> None:
+    def show(argv, **_kwargs):
+        assert "--property=LoadState,ActiveState,SubState,Job" in argv
+        assert "--all" in argv
+        return subprocess.CompletedProcess(
+            argv, 0, f"LoadState=loaded\nActiveState=inactive\nSubState=dead\nJob={job}\n", ""
+        )
+
+    monkeypatch.setattr("app_watch.services.systemd.subprocess.run", show)
+    state = RealSystemdController().unit_state("fake.service")
+    assert state is not None and state.is_active_or_pending() is pending
+
+
+def test_missing_job_evidence_is_inconclusive(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app_watch.services.systemd.subprocess.run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(
+            argv, 0, "ActiveState=inactive\nSubState=dead\n", ""
+        ),
+    )
+    assert RealSystemdController().unit_state("fake.service") is None
+
+
+@pytest.mark.parametrize("returncode", [0, 4, 5])
+def test_explicit_not_found_properties_confirm_absence(monkeypatch, returncode: int) -> None:
+    monkeypatch.setattr(
+        "app_watch.services.systemd.subprocess.run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(
+            argv, returncode, "LoadState=not-found\nActiveState=inactive\nSubState=dead\nJob=\n", ""
+        ),
+    )
+    state = RealSystemdController().unit_state("fake.service")
+    assert (
+        state is not None and state.load_state == "not-found" and not state.is_active_or_pending()
+    )
+
+
+@pytest.mark.parametrize(
+    "unit_rows,job_rows,listing_code,expected",
+    [
+        ("", "", 0, "absent"),
+        ("", "123 fake.service start waiting\n", 0, "pending"),
+        ("fake.service loaded inactive dead\n", "", 0, "unknown"),
+        ("", "malformed response\n", 0, "unknown"),
+        ("", "", 1, "unknown"),
+    ],
+)
+def test_failed_lookup_needs_positive_unit_and_job_absence(
+    monkeypatch,
+    unit_rows: str,
+    job_rows: str,
+    listing_code: int,
+    expected: str,
+) -> None:
+    def query(argv, **_kwargs):
+        if "show" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "lookup failed")
+        if "list-units" in argv:
+            return subprocess.CompletedProcess(argv, listing_code, unit_rows, "")
+        assert "list-jobs" in argv
+        return subprocess.CompletedProcess(argv, 0, job_rows, "")
+
+    monkeypatch.setattr("app_watch.services.systemd.subprocess.run", query)
+    state = RealSystemdController().unit_state("fake.service")
+    if expected == "unknown":
+        assert state is None
+    else:
+        assert state is not None and state.is_active_or_pending() is (expected == "pending")
+
+
+@pytest.mark.parametrize(
+    "unit_state,executable_exists,ready",
+    [
+        ("static", True, True),
+        ("masked", True, False),
+        ("bad", True, False),
+        ("static", False, False),
+    ],
+)
+def test_template_preflight_inspects_files_and_binary_without_probe_unit(
+    tmp_path: Path,
+    monkeypatch,
+    unit_state: str,
+    executable_exists: bool,
+    ready: bool,
+) -> None:
+    binary = tmp_path / "app-watch"
+    if executable_exists:
+        binary.write_text("#!/bin/sh\nexit 0\n")
+        binary.chmod(0o700)
+
+    def query(argv, **_kwargs):
+        assert "start" not in argv and "show" not in argv
+        if "list-unit-files" in argv:
+            stdout = f"app-watch-exec@.service {unit_state} -\n"
+        else:
+            assert "cat" in argv
+            stdout = (
+                "[Service]\nType=oneshot\nRestart=no\nTimeoutStartSec=infinity\nUMask=0077\n"
+                f"ExecStart={binary} --user trigger exec-worker %i\n"
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+    monkeypatch.setattr("app_watch.services.systemd.subprocess.run", query)
+    assert RealSystemdController().template_ready() is ready
+
+
+def test_incomplete_load_evidence_cannot_release_worker_slot(monkeypatch):
+    monkeypatch.setattr(
+        "app_watch.services.systemd.subprocess.run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(
+            argv,
+            0,
+            "ActiveState=inactive\nSubState=dead\nJob=0\n",
+            "",
+        ),
+    )
+    assert RealSystemdController().unit_state("fake.service") is None
+
+
+def test_communication_failure_after_spawn_is_uncertain(monkeypatch):
+    def failed_communication(**kwargs):
+        raise OSError("pipe read failed after possible submission")
+
+    process = SimpleNamespace(
+        communicate=failed_communication,
+        kill=lambda: None,
+        wait=lambda **kwargs: None,
+        stdout=None,
+        stderr=None,
+    )
+    monkeypatch.setattr(
+        "app_watch.services.systemd.subprocess.Popen", lambda *args, **kwargs: process
+    )
+    result = RealSystemdController().start_unit("fake.service")
+    assert result.classification is SubmissionClass.INCONCLUSIVE and result.spawned
+
+
+@pytest.mark.parametrize("exit_code", [0, 4, 5, 6])
+def test_real_start_success_and_numeric_failure_classification(monkeypatch, exit_code):
+    def popen(argv, **kwargs):
+        assert argv == ["systemctl", "--user", "start", "--no-block", "fake.service"]
+        return SimpleNamespace(
+            communicate=lambda **kwargs: ("", "diagnostic"),
+            returncode=exit_code,
+        )
+
+    monkeypatch.setattr("app_watch.services.systemd.subprocess.Popen", popen)
+    result = RealSystemdController().start_unit("fake.service")
+    expected = SubmissionClass.ACCEPTED if exit_code == 0 else SubmissionClass.INCONCLUSIVE
+    assert result.classification is expected and result.spawned
