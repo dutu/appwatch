@@ -27,6 +27,9 @@ independent watch slots, pending reconfirmation, retry-delay persistence,
 corrupt-state isolation, history cleanup and foreground-monitor signal handling.
 CLI worker checks verify zero exits for durable success, failure, missing-command
 and blocked receipts, and nonzero exits or propagated exceptions for worker errors.
+They also check worker start/result messages, failure tracebacks, result details
+and log-level filtering. Monitor checks verify reconciled result details and
+ERROR/WARNING severity for failed/blocked actions.
 Its real subprocesses are harmless helpers; the controller is injected so tests
 do not install services or write to the account's actual recovery directory.
 `tests/test_systemd.py` ports the source adapter's service-state and template

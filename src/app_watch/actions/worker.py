@@ -113,7 +113,9 @@ def exec_worker(
                     char if char.isprintable() or char == "\n" else ascii(char)[1:-1]
                     for char in text
                 )
-                logging.getLogger("app_watch.worker").info("Action output:\n%s", safe)
+                logging.getLogger("app_watch.worker").info(
+                    "Action output: attempt_id=%s\n%s", attempt_id, safe
+                )
             receipt = Receipt(
                 attempt_id=attempt_id,
                 request_id=request.request_id,

@@ -4,7 +4,7 @@ import json
 import os
 import signal
 import sys
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from uuid import uuid4
 
 import pytest
@@ -647,7 +647,10 @@ def test_competing_worker_cannot_run_same_attempt(watch, store, monkeypatch):
     assert len(calls) == 1
 
 
-def test_monitor_cli_preflight_and_signal_handlers(watch, store, tmp_path, monkeypatch):
+@pytest.mark.parametrize("outcome", [None, "succeeded", "failed", "blocked"])
+def test_monitor_cli_preflight_and_signal_handlers(
+    watch, store, tmp_path, monkeypatch, caplog, outcome
+):
     from threading import Event
 
     from app_watch.cli.monitor import run_monitor
@@ -664,11 +667,24 @@ def test_monitor_cli_preflight_and_signal_handlers(watch, store, tmp_path, monke
         def template_ready(self):
             return True
 
+    receipt = None
+    if outcome is not None:
+        if outcome == "failed":
+            watch.config.action.argv = [sys.executable, "-c", "raise SystemExit(10)"]
+        attempt = stage(store, watch)
+        receipt = exec_worker(
+            store,
+            attempt,
+            scope=watch.scope,
+            provider=FakeProvider([running(watch)] if outcome == "blocked" else []),
+        )
+    caplog.set_level("INFO", logger="app_watch.monitor")
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
     monkeypatch.setattr("app_watch.cli.monitor.Event", StopAfterTick)
     monkeypatch.setattr("app_watch.cli.monitor.RealSystemdController", ReadyManager)
+    monkeypatch.setattr("app_watch.cli.monitor.AsyncSystemdController", nullcontext)
     monkeypatch.setattr("app_watch.cli.monitor.state_root", lambda scope: store.root)
     monkeypatch.setattr("app_watch.cli.monitor.require_monitor_identity", lambda *args: None)
     monkeypatch.setattr(
@@ -678,6 +694,14 @@ def test_monitor_cli_preflight_and_signal_handlers(watch, store, tmp_path, monke
     assert run_monitor(watch, expected_identity=watch.scope) == 0
     assert signal.getsignal(signal.SIGTERM) == before
     assert store.read_instance(watch.config.job.id).pending_request is None
+    if receipt is not None:
+        records = [r for r in caplog.records if r.name == "app_watch.monitor"]
+        result = next(r for r in records if r.getMessage().startswith(f"action_{outcome}:"))
+        assert result.levelname == {"failed": "ERROR", "blocked": "WARNING"}.get(outcome, "INFO")
+        assert f"attempt_id={receipt.attempt_id}" in result.getMessage()
+        assert f"exit_code={receipt.exit_code}" in result.getMessage()
+        assert f"signal_number={receipt.signal_number}" in result.getMessage()
+        assert f"reason={receipt.reason!r}" in result.getMessage()
     with pytest.raises(BlockedError, match="identity changed"):
         run_monitor(watch, expected_identity="0" * 16)
 
@@ -690,7 +714,10 @@ def test_cli_worker_rejects_arbitrary_paths(capsys):
 
 
 @pytest.mark.parametrize("outcome", ["succeeded", "failed", "missing", "blocked", "signal"])
-def test_cli_worker_exits_zero_for_recorded_results(watch, store, monkeypatch, outcome):
+@pytest.mark.parametrize("log_level", ["INFO", "WARNING", "ERROR"])
+def test_cli_worker_exits_zero_for_recorded_results(
+    watch, store, monkeypatch, caplog, outcome, log_level
+):
     from app_watch.cli import main
 
     if outcome == "failed":
@@ -707,6 +734,7 @@ def test_cli_worker_exits_zero_for_recorded_results(watch, store, monkeypatch, o
     provider = FakeProvider([running(watch)] if outcome == "blocked" else [])
     monkeypatch.setattr("app_watch.cli.monitor.state_root", lambda scope: store.root)
     monkeypatch.setattr("app_watch.actions.worker.PsutilProcessProvider", lambda **kw: provider)
+    caplog.set_level(log_level, logger="app_watch.worker")
 
     assert main(["exec-worker", f"{watch.scope}_{attempt}"]) == 0
     receipt = store.read_receipt(attempt)
@@ -723,6 +751,25 @@ def test_cli_worker_exits_zero_for_recorded_results(watch, store, monkeypatch, o
         assert store.read_bytes(store.attempt_dir(attempt) / "log.txt") is None
     else:
         assert receipt.exit_code == 0
+    messages = [r for r in caplog.records if r.name == "app_watch.worker"]
+    assert any(r.getMessage() == f"worker_started: attempt_id={attempt}" for r in messages) == (
+        log_level == "INFO"
+    )
+    expected_level = {"failed": "ERROR", "blocked": "WARNING"}.get(receipt.outcome, "INFO")
+    visible = (
+        expected_level == "ERROR"
+        or log_level == "INFO"
+        or (expected_level == "WARNING" and log_level == "WARNING")
+    )
+    results = [r for r in messages if r.getMessage().startswith("action_")]
+    assert len(results) == int(visible)
+    if visible:
+        result = results[0]
+        assert result.levelname == expected_level
+        assert f"attempt_id={attempt}" in result.getMessage()
+        assert f"exit_code={receipt.exit_code}" in result.getMessage()
+        assert f"signal_number={receipt.signal_number}" in result.getMessage()
+        assert f"reason={receipt.reason!r}" in result.getMessage()
     # Returning an existing immutable receipt also completes the worker's job.
     assert main(["exec-worker", f"{watch.scope}_{attempt}"]) == 0
     assert store.read_receipt(attempt) == receipt
@@ -730,7 +777,7 @@ def test_cli_worker_exits_zero_for_recorded_results(watch, store, monkeypatch, o
 
 @pytest.mark.parametrize("error_type", [StateError, OSError, RuntimeError])
 def test_cli_worker_does_not_succeed_when_receipt_cannot_be_persisted(
-    watch, store, monkeypatch, capsys, error_type
+    watch, store, monkeypatch, capsys, caplog, error_type
 ):
     from app_watch.cli import main
 
@@ -751,6 +798,11 @@ def test_cli_worker_does_not_succeed_when_receipt_cannot_be_persisted(
         assert main(["exec-worker", f"{watch.scope}_{attempt}"]) == 2
         assert "Cannot persist receipt" in capsys.readouterr().err
     assert store.read_receipt(attempt) is None
+    result = next(r for r in caplog.records if r.name == "app_watch.worker")
+    assert result.levelname == "ERROR"
+    assert result.getMessage() == f"worker_failed: attempt_id={attempt}"
+    assert result.exc_info and str(result.exc_info[1]) == "Cannot persist receipt"
+    assert not any(r.getMessage().startswith("action_") for r in caplog.records)
 
 
 def test_background_pipe_writer_cannot_hold_runner_forever(tmp_path):

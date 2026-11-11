@@ -20,9 +20,23 @@ from app_watch.services.async_controller import AsyncSystemdController
 from app_watch.services.monitor import require_monitor_identity
 from app_watch.services.systemd import RealSystemdController
 from app_watch.trigger.locking import exclusive_lock, monitor_lock
+from app_watch.trigger.models import Receipt
 from app_watch.trigger.monitor import Monitor
 from app_watch.trigger.paths import monitor_lock_path, runtime_dir, state_root
 from app_watch.trigger.state import StateStore
+
+
+def _log_action_result(logger: logging.Logger, receipt: Receipt) -> None:
+    level = {"failed": logging.ERROR, "blocked": logging.WARNING}.get(receipt.outcome, logging.INFO)
+    logger.log(
+        level,
+        "action_%s: attempt_id=%s exit_code=%s signal_number=%s reason=%r",
+        receipt.outcome,
+        receipt.attempt_id,
+        receipt.exit_code,
+        receipt.signal_number,
+        receipt.reason,
+    )
 
 
 def run_monitor(watch: PreparedWatch, *, expected_identity: str | None = None) -> int:
@@ -88,8 +102,20 @@ def run_monitor(watch: PreparedWatch, *, expected_identity: str | None = None) -
                 except BlockedError:
                     events = []  # A lifecycle command owns dispatch until its final safety check.
                 for event in events:
+                    receipt = monitor.state.last_receipt
+                    if (
+                        event.kind in ("action_succeeded", "action_failed", "action_blocked")
+                        and receipt is not None
+                        and receipt.attempt_id == event.detail
+                    ):
+                        _log_action_result(logger, receipt)
+                        continue
                     logger.log(
-                        logging.ERROR if event.kind == "dispatch_blocked" else logging.INFO,
+                        {
+                            "dispatch_blocked": logging.ERROR,
+                            "action_failed": logging.ERROR,
+                            "action_blocked": logging.WARNING,
+                        }.get(event.kind, logging.INFO),
                         "%s: %s",
                         event.kind,
                         event.detail or watch.config.job.id,
@@ -114,6 +140,13 @@ def run_worker(selection: str) -> int:
     request = store.read_request(attempt_id)
     if request is not None:
         logging.basicConfig(level=request.log_level.upper())
-    exec_worker(store, attempt_id, scope=scope)
+    logger = logging.getLogger("app_watch.worker")
+    logger.info("worker_started: attempt_id=%s", attempt_id)
+    try:
+        receipt = exec_worker(store, attempt_id, scope=scope)
+    except Exception:
+        logger.exception("worker_failed: attempt_id=%s", attempt_id)
+        raise
+    _log_action_result(logger, receipt)
     # A durable receipt completes the worker's job, regardless of action outcome.
     return 0

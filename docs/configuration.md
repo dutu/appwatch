@@ -33,6 +33,18 @@ The schema version is App-watch's own version, independent of VaultKeep.
 | `logging.level` | `error`, `warning`, `info`, or `debug`; default `info`. |
 | `logging.include_command_output` | Boolean; default `false`. Log bounded action output at INFO in the worker journal when enabled; the configured log level still applies. Private per-attempt diagnostics are retained regardless. |
 
+The worker logs each invocation at INFO with its attempt ID, then logs the durable
+action result: success at INFO, failure at ERROR, or blocked execution at WARNING.
+Results include the attempt ID, exit code, signal number and reason; unavailable
+values appear as `None`. The monitor logs the same result when it reconciles the
+completed attempt. Worker errors log at ERROR with the attempt ID and a traceback,
+and still produce a nonzero exit. Startup errors before worker logging is set up
+are reported on stderr. Service output is available in the systemd journal.
+The configured log level applies to all of these messages: `warning` retains
+failures and blocked results, while `error` retains failures only. Command
+arguments, environment and output are excluded from lifecycle messages; command
+output is logged separately only when `logging.include_command_output` is enabled.
+
 An entrypoint's `kind` is `script`, `jar`, or `java_main`. Script/JAR values use
 absolute or `~/` paths; Java main classes use exact class-name tokens. Alternative
 entrypoints have OR semantics; additional matcher predicates remain mandatory.
