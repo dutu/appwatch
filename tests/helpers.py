@@ -29,6 +29,9 @@ class FakeProvider:
     def resolve_directory(self, pid: int, value: str) -> str | None:
         return None  # These fakes provide no verified home/cwd context.
 
+    def read_text_file(self, pid: int, path: str) -> tuple[str | None, str]:
+        return None, "inaccessible"  # File-aware tests supply explicit evidence.
+
     def alive(self, pid: int, create_time: float) -> bool:
         return self.alive_result and any(
             proc.pid == pid and proc.create_time == create_time for proc in self.processes

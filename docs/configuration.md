@@ -13,7 +13,7 @@ The schema version is App-watch's own version, independent of VaultKeep.
 | --- | --- |
 | `config_version` | Required integer `1`. |
 | `job.id` | Required ID: 1–128 letters, digits, underscores, or hyphens. |
-| `application.name` | Required `bisq`, `electrum`, or `wasabi`. |
+| `application.name` | Required `bisq`, `electrum`, `wasabi`, or `monero`. |
 | `application.data_dir` | Required absolute or `~/` account-home path. Runtime validation requires an existing directory owned by the execution account. |
 | `application.matcher.entrypoints` | Required nonempty list of `{kind, value}` mappings; duplicates are errors. |
 | `application.matcher.exe_realpath` | Optional absolute or `~/` executable path predicate. |
@@ -45,10 +45,19 @@ failures and blocked results, while `error` retains failures only. Command
 arguments, environment and output are excluded from lifecycle messages; command
 output is logged separately only when `logging.include_command_output` is enabled.
 
-An entrypoint's `kind` is `script`, `jar`, or `java_main`. Script/JAR values use
-absolute or `~/` paths; Java main classes use exact class-name tokens. Alternative
+An entrypoint's `kind` is `script`, `jar`, `java_main`, or `executable_name`.
+Script/JAR values use absolute or `~/` paths; Java main classes use exact class-name tokens. Alternative
 entrypoints have OR semantics; additional matcher predicates remain mandatory.
 An executable predicate alone does not replace the required entrypoints list.
+
+`executable_name` matches the basename of the actual executable metadata. Its
+value is a literal name, without slashes, whitespace, wildcards, or parameter
+placeholders, and receives no path expansion. Monero requires exactly the
+`monero-wallet-gui` and `monero-wallet-rpc` executable-name alternatives and permits
+no supporting matcher predicates. Its `data_dir` is the wallet's containing
+directory. It reads wallet selection from application settings and, after
+activation, waits for all matching processes to exit. See
+[Monero setup and limits](applications.md#monero-gui-and-rpc).
 
 ## Runtime parameters and paths
 

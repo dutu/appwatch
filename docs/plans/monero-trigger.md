@@ -1,8 +1,9 @@
 # Monero trigger implementation plan
 
-Implement the [Monero trigger design](../design/monero-trigger.md) after approval.
-Keep changes uncommitted. The design defines behavior; this file gives the work
-order and validation required before reporting completion.
+The [Monero trigger design](../design/monero-trigger.md) is implemented. This file
+records the implementation scope and validation requirements; actual results and
+limits are recorded in [validation evidence](../development/validation.md).
+Keep changes uncommitted.
 
 ## 1. Native executable alternatives
 
@@ -93,11 +94,16 @@ Update `tests/helpers.py` and other provider fakes affected by the new reader.
 - GUI primary/XDG/default paths, process versus monitor environment, portable
   precedence and mode changes, absent/unreadable cwd/environment/files, unsupported
   fallback settings, and changes to `wallet_path` on the same PID across polls.
+- RPC `argv[0]` spoofing for both wallet and configuration selection, with and
+  without conflicting genuine arguments; UTF-16 surrogate-pair paths and
+  rejection of unpaired surrogates, including a fixture emitted by the native GUI.
 - GUI Qt quoting/escaping, RPC separated/equals arguments, explicit config,
   direct wallet selection, agreeing/conflicting sources, malformed/duplicate
   relevant options/keys, unrelated credential keys, relative paths, Unicode and
   spaces, symlink resolution, exact parent comparison, unsupported modes,
   oversized/nonregular files, decoding errors, and partial settings writes.
+- In-place same-size settings mutation during inspection and unavailable
+  environment/settings at worker execution, without changing orchestration.
 - Startup without target activation never dispatches, even after unrelated
   Monero processes stop. Switching A to watched B arms; switching B back to A
   does not release the guard. A surviving unrelated-wallet RPC/GUI blocks it.
@@ -134,8 +140,8 @@ clocks, and harmless actions for regression coverage.
 Perform a disposable native v0.18.5.4 GUI/RPC smoke check in the VM with Xvfb as
 needed, disposable wallets and isolated HOME/XDG/cwd. Verify actual executable
 metadata, selected settings paths, GUI wallet switching and settings writes,
-RPC explicit config selection, and running-to-stopped detection. Extend
-`tests/live_wallet.py` only where necessary for these Monero checks. Keep wallet
+RPC explicit config selection, and running-to-stopped detection. Use
+`tests/live_monero.py` for isolated native startup checks. Keep wallet
 creation data, application downloads and credentials in the guest, outside the
 synchronized source tree; use no real funds or host profiles. Report any missing
 live validation as a limitation rather than treating fixtures as proof of binary

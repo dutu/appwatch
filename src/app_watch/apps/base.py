@@ -15,6 +15,7 @@ type DirectoryResult = tuple[str | None, str]
 
 class AppAdapter(Protocol):
     env_keys: frozenset[str]
+    blocks_shutdown_on_identity: bool
 
     def resolve_directory(
         self, proc: ProcessInfo, provider: ProcessProvider

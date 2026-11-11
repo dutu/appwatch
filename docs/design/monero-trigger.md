@@ -4,7 +4,8 @@
 
 Add `application.name: monero` for one watch covering both native Linux
 `monero-wallet-gui` and `monero-wallet-rpc` processes owned by the execution
-account. This is a design for implementation; Monero support is not yet available.
+account. The implementation follows this specification; validation results are
+recorded separately in the development documentation.
 
 Keep `application.data_dir` as the watched wallet's containing directory. Read
 the wallet filename from the application's settings and compare its canonical
@@ -83,8 +84,8 @@ file-existence checks or command-line fallback to turn uncertainty into absence.
 
 ### YAML and validation
 
-Example application section, to be included in a disabled full example during
-implementation:
+Example application section; the full disabled template is
+[monero-trigger.yaml](../../examples/monero-trigger.yaml):
 
 ```yaml
 application:
@@ -147,6 +148,8 @@ could find it in another file. Do not silently read a Tails persistence path.
 ### RPC
 
 Read the configuration selected by `--config-file PATH` or `--config-file=PATH`.
+Parse selection options only from arguments after `argv[0]`; the executable's
+customizable argument zero is never wallet/configuration evidence.
 Do not assume that RPC automatically reads the observed file when the option is
 absent. Read `wallet-file` from that configuration. Also recognize an explicit
 `--wallet-file PATH` or `--wallet-file=PATH` for installations specifying the
@@ -173,8 +176,10 @@ uncertain for that poll.
 Use application-specific parsing: Qt INI for the GUI's `[General]` setting and
 Monero/Boost-style `key=value` for RPC. Preserve case and disable interpolation.
 Handle the quoted/escaped scalar path forms emitted by the supported GUI
-release, with fixtures based on that format. Reject duplicate relevant keys,
-invalid escapes, nonstring Qt encodings, empty values, and unsupported forms
+release, including UTF-16 surrogate pairs for non-BMP characters, with fixtures
+based on that format. Combine valid pairs and reject unpaired surrogates.
+Reject duplicate relevant keys, invalid escapes, nonstring Qt encodings,
+empty values, and unsupported forms
 rather than inventing a path. Ignore unrelated keys; do not deserialize Qt
 objects, load wallets, or interpret configuration as executable content.
 
@@ -254,6 +259,10 @@ open wallet or another executable with the same basename can delay an action
 indefinitely by design. Deleting or editing configuration never establishes
 shutdown while a matched process exists.
 
+Any same-user process with unreadable executable identity prevents a verified
+stopped result. This includes protected session services on some systems; the
+adapter cannot establish that an uninspectable executable is unrelated.
+
 ## Implementation and verification
 
 Follow the [implementation plan](../plans/monero-trigger.md). Update the
@@ -269,4 +278,5 @@ Source references for the observed release:
 - [GUI wallet_path and Tails settings](https://github.com/monero-project/monero-gui/blob/v0.18.5.4/main.qml)
 - [RPC shared option/configuration parsing](https://github.com/monero-project/monero/blob/v0.18.5.4/src/wallet/wallet_args.cpp)
 - [Qt 5 settings paths and serialization](https://doc.qt.io/archives/qt-5.15/qsettings.html)
+- [Qt 5 INI string serializer](https://github.com/qt/qtbase/blob/5.15/src/corelib/io/qsettings.cpp)
 - [Linux executable metadata and deletion markers](https://man7.org/linux/man-pages/man5/proc_pid_exe.5.html)

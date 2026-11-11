@@ -9,11 +9,11 @@ execute an external command configured for that watch. Commands are argument
 arrays executed without an implicit shell. App-watch has no dependency on an
 installed VaultKeep or on the sibling checkout.
 
-Support Bisq 1 desktop/API daemon, Electrum client, and Wasabi GUI/daemon first.
-Preserve their existing identity rules and multi-instance separation. Application
-adapters must be independent of each other and of action execution. Future Monero
-GUI and RPC wallet support belongs in new adapters, with its own process-model
-verification; it is outside the initial implementation.
+Support Bisq 1 desktop/API daemon, Electrum client, Wasabi GUI/daemon, and Monero
+GUI/RPC wallets. Preserve each application's identity and directory rules.
+Application adapters must be independent of each other and of action execution.
+The [Monero specification](monero-trigger.md) defines its settings discovery,
+executable-name matching, and shared shutdown guard across wallet changes.
 
 Provide installation, update, uninstallation, YAML configuration and examples,
 runtime parameter settings, validation, watch listing, status, notifications,
@@ -66,6 +66,7 @@ src/app_watch/
     bisq.py
     electrum.py
     wasabi.py
+    monero.py
   process.py              # Same-user inspection, identity matching, PID race checks
   config/                 # Strict schema, paths, runtime parameters, preparation
   trigger/                # Lifecycle, monitor, requests, persistence, recovery
@@ -87,13 +88,14 @@ Use a static built-in registry, not a dynamic plugin loader. Adding a wallet sho
 require its adapter, registration, examples, tests, and documentation; it should
 not require changes to lifecycle, persistence, workers, or the installer.
 
-### Initial application behavior
+### Application behavior
 
 | Application | Directory evidence and identity requirements |
 | --- | --- |
 | Bisq | Explicit `--appDataDir`, including separate and `=` forms. Preserve configured script, JAR, and Java main-class entrypoints for desktop and daemon. |
 | Electrum | Explicit `-D`/`--dir` takes precedence over `ELECTRUMDIR`. Explicit directory arguments do not require environment inspection unless another configured predicate requires it. |
 | Wasabi | `WASABI_DATADIR` takes precedence over `--datadir`; unreadable required environment remains uncertainty. Preserve configured GUI/daemon entrypoints. |
+| Monero | Require GUI/RPC actual executable basenames; read GUI normal/portable `wallet_path` and RPC explicit config/direct `wallet-file`. Activate by wallet parent directory, then block shutdown while any matching same-user GUI/RPC process remains. |
 
 Retain alternative-entrypoint OR semantics, additional mandatory matcher
 predicates, canonical paths, process-relative directory resolution, owner checks,
@@ -208,7 +210,7 @@ must leave VaultKeep files, services, and data untouched.
 
 Ported tests establish behavior under controlled process and manager conditions.
 Production readiness additionally requires real systemd user-manager exercises
-and verification of the installed Bisq, Electrum, and Wasabi process models.
+and verification of the installed Bisq, Electrum, Wasabi, and Monero process models.
 Neither schema validation nor mocked systemctl tests certify those deployment
 properties. The [implementation plan](../plans/implementation.md) specifies gates
 for the complete project.

@@ -8,7 +8,7 @@ VaultKeep working tree remains unchanged.
 ## Automated and package checks
 
 - Python 3.13.5; systemd 257.13.
-- 346 automated tests pass, including the real hash-locked environment build and
+- 486 automated tests pass, including the real hash-locked environment build and
   installed command invocation outside the checkout.
 - Ruff lint and format checks cover `src`, `tests` and `scripts`.
 - Wheel and source distribution build successfully. The installed package has
@@ -71,6 +71,42 @@ Sources: [Bisq release](https://github.com/bisq-network/bisq/releases/tag/v1.10.
 These are process-identity checks, not wallet synchronization, trading,
 coinjoin, backup-consistency or funds-handling tests. Matchers remain specific to
 the installed launch model and must be checked locally after wallet upgrades.
+
+## Monero trigger validation
+
+The Monero implementation passed the complete 486-test suite, Ruff lint and
+format checks, wheel/source-distribution builds, and `pip check` inside the
+disposable Debian VM. Coverage includes executable names across versions and
+directories, settings changes on a continuing PID, remembered activation,
+pending reconfirmation, exclusion of spoofed RPC argument zero, UTF-16 surrogate
+pair decoding, in-place settings mutation, and unavailable settings at the final
+worker check. Real Linux regressions unlink
+copied harmless native executables named for both GUI/RPC while they remain
+alive and verify that detection and worker execution stay blocked.
+
+`tests/live_monero.py` also passed against official native GUI/CLI v0.18.5.4
+distributions downloaded into the guest. It generated two disposable offline
+wallets and isolated HOME/XDG/cwd, then verified GUI normal settings, GUI portable
+settings taking precedence over a conflicting normal file, and RPC explicit
+`--config-file` and direct `--wallet-file` selection. It unlocked the first wallet
+and switched the continuing GUI process to a second wallet whose directory and
+filename contain spaces, `é`, and an emoji. It then read back Qt's actual emitted
+`wallet_path`, including escaped UTF-16 surrogate pairs and the selected `.keys`
+suffix, and verified detection for both the new directory and the still-blocked
+original directory. Each launched process was detected running and
+then absent after termination. Wallet data and logs remained only in guest
+temporary directories; no existing wallets, host profiles, or funds were used.
+
+Native checks restrict observation to launched wallet PIDs. The full VM scan
+contains protected same-user session processes (`systemd`, `sd-pam`, SSH) whose
+executable metadata cannot be read. The conservative production policy correctly
+reports inspection unavailable in that situation, so these smoke checks do not
+establish that unrestricted shutdown confirmation works on that session setup.
+Unreadable identities can indefinitely delay actions; they are not silently
+excluded. Native GUI automation uses the fixed English v0.18.5.4 layout; other
+versions/layouts may require changes to the test coordinates. These checks do
+not certify backup consistency or close the race between final inspection and
+a wallet restarting.
 
 ## Reproducing checks
 

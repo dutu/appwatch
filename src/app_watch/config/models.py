@@ -60,12 +60,19 @@ class JobConfig(StrictModel):
 
 
 class EntrypointConfig(StrictModel):
-    kind: Literal["script", "jar", "java_main"]
+    kind: Literal["script", "jar", "java_main", "executable_name"]
     value: NonEmpty
 
     @model_validator(mode="after")
     def validate_path(self) -> EntrypointConfig:
-        if self.kind != "java_main":
+        if self.kind == "executable_name":
+            if (
+                self.value in (".", "..")
+                or any(char in self.value for char in "/\\*?[]{}")
+                or any(char.isspace() or not char.isprintable() for char in self.value)
+            ):
+                raise ValueError("executable_name must be a literal basename")
+        elif self.kind != "java_main":
             absolute_or_home(self.value)
         return self
 
@@ -115,6 +122,20 @@ class ApplicationConfig(StrictModel):
     @model_validator(mode="after")
     def adapter_settings(self) -> ApplicationConfig:
         adapter = get_adapter(self.name)
+        if self.name == "monero":
+            identities = {(item.kind, item.value) for item in self.matcher.entrypoints}
+            if identities != {
+                ("executable_name", "monero-wallet-gui"),
+                ("executable_name", "monero-wallet-rpc"),
+            }:
+                raise ValueError("Monero requires GUI and RPC executable_name entrypoints")
+            if (
+                self.matcher.exe_realpath is not None
+                or self.matcher.argv_tokens
+                or self.matcher.cmdline_regex is not None
+                or self.matcher.env_eq
+            ):
+                raise ValueError("Monero matcher must not narrow the shared process guard")
         unknown = set(self.matcher.env_eq) - adapter.env_keys
         if unknown:
             raise ValueError("unsupported matcher environment keys: " + ", ".join(sorted(unknown)))

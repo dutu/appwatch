@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 
 class BisqAdapter:
+    blocks_shutdown_on_identity = False
     env_keys: frozenset[str] = frozenset()
 
     def resolve_directory(self, proc: ProcessInfo, provider: ProcessProvider) -> DirectoryResult:

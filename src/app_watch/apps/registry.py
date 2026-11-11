@@ -3,12 +3,14 @@
 from app_watch.apps.base import AppAdapter
 from app_watch.apps.bisq import BisqAdapter
 from app_watch.apps.electrum import ElectrumAdapter
+from app_watch.apps.monero import MoneroAdapter
 from app_watch.apps.wasabi import WasabiAdapter
 
 ADAPTERS: dict[str, AppAdapter] = {
     "bisq": BisqAdapter(),
     "electrum": ElectrumAdapter(),
     "wasabi": WasabiAdapter(),
+    "monero": MoneroAdapter(),
 }
 
 

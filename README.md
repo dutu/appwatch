@@ -50,7 +50,10 @@ Never select VaultKeep's installation paths.
 ## Configure and validate a watch
 
 Copy a disabled template: [Bisq](examples/bisq-trigger.yaml),
-[Electrum](examples/electrum-trigger.yaml), or [Wasabi](examples/wasabi-trigger.yaml).
+[Electrum](examples/electrum-trigger.yaml), [Wasabi](examples/wasabi-trigger.yaml),
+or [Monero GUI/RPC](examples/monero-trigger.yaml).
+The [Monero setup guide](docs/applications.md#monero-gui-and-rpc) describes wallet
+settings discovery and its shared shutdown guard.
 For example, as the application owner:
 
 ```sh

@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import pwd
 import re
+import stat
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -123,13 +124,26 @@ def match_identity(matcher: MatcherSpec, proc: ProcessInfo) -> MatchResult:
             return MatchResult(False, "executable path does not match")
 
     if matcher.entrypoints:
-        if not proc.cmdline_available:
-            unavailable = True
-        elif not any(
-            _match_entrypoint(entrypoint.value, entrypoint.kind, proc.cmdline)
-            for entrypoint in matcher.entrypoints
-        ):
+        entry_matched = False
+        entry_unavailable = False
+        for entry in matcher.entrypoints:
+            if entry.kind == "executable_name":
+                if not proc.exe_realpath or not os.path.isabs(proc.exe_realpath):
+                    entry_unavailable = True
+                elif os.path.basename(proc.exe_realpath) == entry.value:
+                    entry_matched = True
+                elif proc.exe_realpath.endswith(" (deleted)") and (
+                    os.path.basename(proc.exe_realpath.removesuffix(" (deleted)")) == entry.value
+                ):
+                    entry_unavailable = True
+            elif not proc.cmdline_available:
+                entry_unavailable = True
+            elif _match_entrypoint(entry.value, entry.kind, proc.cmdline):
+                entry_matched = True
+        if not entry_matched and not entry_unavailable:
             return MatchResult(False, "no configured entrypoint matches")
+        if not entry_matched:
+            unavailable = True
 
     if matcher.exe_realpath is None and not matcher.entrypoints:
         return MatchResult(False, "matcher declares no strong identity")
@@ -196,6 +210,9 @@ class ProcessProvider(Protocol):
     def alive(self, pid: int, create_time: float) -> bool | None:
         """Return whether ``pid`` is still the same process (pid + create time)."""
 
+    def read_text_file(self, pid: int, path: str) -> tuple[str | None, str]:
+        """Read bounded regular UTF-8 settings: resolved/missing/inaccessible/unresolved."""
+
 
 class PsutilProcessProvider:
     """Real process provider using psutil."""
@@ -226,7 +243,9 @@ class PsutilProcessProvider:
                 cmdline = ()
                 cmdline_available = False
             try:
-                exe = proc.exe()
+                # Avoid psutil's cached executable path surviving unlink/replacement.
+                # Preserve the kernel's deletion marker for conservative matching.
+                exe = os.readlink(f"/proc/{pid}/exe")
             except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
                 exe = None
             if not self.alive(pid, float(create_time)):
@@ -296,6 +315,42 @@ class PsutilProcessProvider:
             return False
         except psutil.AccessDenied:
             return None
+
+    def read_text_file(self, pid: int, path: str) -> tuple[str | None, str]:
+        expected = self._last.get(pid)
+        if expected is None or not os.path.isabs(path) or not self.alive(pid, expected):
+            return None, "inaccessible"
+        limit = 1024 * 1024
+        opened = False
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+            opened = True
+            with os.fdopen(descriptor, "rb") as stream:
+                before = os.fstat(stream.fileno())
+                if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+                    return None, "unresolved"
+                data = stream.read(limit + 1)
+                after = os.fstat(stream.fileno())
+                current = os.stat(path)
+                if (
+                    len(data) > limit
+                    or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                    != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                    or (after.st_dev, after.st_ino) != (current.st_dev, current.st_ino)
+                ):
+                    return None, "unresolved"
+                text = data.decode("utf-8-sig")
+                if "\0" in text:
+                    return None, "unresolved"
+        except FileNotFoundError:
+            return None, "missing" if not opened and self.alive(pid, expected) else "inaccessible"
+        except UnicodeError:
+            return None, "unresolved"
+        except OSError:
+            return None, "inaccessible"
+        if not self.alive(pid, expected):
+            return None, "inaccessible"
+        return text, "resolved"
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,6 +430,8 @@ def detect_spec(
             continue
         if directory == wanted_dir:
             resolved_matches.append(candidate)
+        elif adapter.blocks_shutdown_on_identity:
+            ambiguous_reason = "another Monero wallet/process remains active"
 
     # Re-validate identity immediately before reporting running.
     for candidate in resolved_matches:
@@ -394,6 +451,12 @@ def detect_spec(
                 },
             )
 
+    if unavailable_reason is not None and adapter.blocks_shutdown_on_identity:
+        return DetectionResult(
+            Observation.INSPECTION_UNAVAILABLE,
+            boot_id=current_boot,
+            reason=unavailable_reason,
+        )
     if ambiguous_reason is not None:
         return DetectionResult(
             observation=Observation.AMBIGUOUS,

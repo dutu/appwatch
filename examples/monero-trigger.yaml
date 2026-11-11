@@ -1,0 +1,30 @@
+# Disabled native Linux template. Verify both actual executable basenames.
+config_version: 1
+job:
+  id: monero-main
+application:
+  name: monero
+  # The wallet's containing directory, not its filename.
+  data_dir: ~/Monero/wallets/my-wallet
+  matcher:
+    entrypoints:
+      - kind: executable_name
+        value: monero-wallet-gui
+      - kind: executable_name
+        value: monero-wallet-rpc
+action:
+  # Harmless example, not a backup: replace with your external command's argv.
+  argv: [/usr/bin/printf, '%s\n', 'monero shutdown confirmed']
+trigger:
+  enabled: false
+  poll_seconds: 2
+  confirm_seconds: 5
+  params: {}
+desktop_notifications:
+  command: notify-send
+  timeout_ms: 5000
+  trigger:
+    enabled: false
+logging:
+  level: info
+  include_command_output: false

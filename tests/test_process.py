@@ -68,3 +68,14 @@ def test_root_provider_inspects_configured_owner_instead_of_executor(monkeypatch
     monkeypatch.setattr(PsutilProcessProvider, "alive", lambda *args: True)
     snapshot = PsutilProcessProvider(owner_uid=4242).snapshot()
     assert [proc.pid for proc in snapshot] == [42]
+
+
+def test_snapshot_keeps_fresh_kernel_deleted_executable_metadata(monkeypatch):
+    mine = _Process(42, os.geteuid())
+    monkeypatch.setattr("app_watch.process.psutil.process_iter", lambda _attrs: [mine])
+    monkeypatch.setattr(PsutilProcessProvider, "alive", lambda *args: True)
+    paths = iter(["/old/monero-wallet-gui", "/old/monero-wallet-gui (deleted)"])
+    monkeypatch.setattr("app_watch.process.os.readlink", lambda path: next(paths))
+    provider = PsutilProcessProvider()
+    assert provider.snapshot()[0].exe_realpath == "/old/monero-wallet-gui"
+    assert provider.snapshot()[0].exe_realpath == "/old/monero-wallet-gui (deleted)"

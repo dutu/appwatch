@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 
 class WasabiAdapter:
+    blocks_shutdown_on_identity = False
     env_keys: frozenset[str] = frozenset({"WASABI_DATADIR"})
 
     def resolve_directory(self, proc: ProcessInfo, provider: ProcessProvider) -> DirectoryResult:

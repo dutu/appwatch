@@ -21,6 +21,39 @@ evidence precedence for Bisq, Electrum, and Wasabi. Configuration tests cover sa
 YAML, rejected backup settings, strict types, runtime parameters, filesystem
 validation, executable symlink preservation, examples, and CLI errors.
 
+`tests/test_monero.py` covers executable-basename configuration, GUI normal/XDG
+and portable settings, Qt scalar parsing, RPC wallet/config options, changing
+wallet selection, the shared process guard, recovery, pending reconfirmation,
+and final worker blocking. It includes real Linux unlink regressions using
+copied harmless native binaries named for GUI/RPC, and bounded regular-file
+reader checks. Those integration cases isolate their process enumeration from
+unrelated VM session services; unreadable same-user executable identities in a
+full scan correctly prevent shutdown confirmation.
+
+For the opt-in native Monero check, extract the official GUI and CLI distributions
+inside the guest, outside the synchronized checkout. Install `xvfb`, `xauth`,
+`xdotool`, `xclip`, and `imagemagick` only in the guest for display interaction and
+failure screenshots, then run:
+
+```sh
+codex-vm test -- xvfb-run -a -s '-screen 0 1280x960x24' \
+  .venv/bin/python tests/live_monero.py \
+  --gui /tmp/monero-gui-v0.18.5.4/monero-wallet-gui \
+  --cli /tmp/monero-x86_64-linux-gnu-v0.18.5.4/monero-wallet-cli \
+  --rpc /tmp/monero-x86_64-linux-gnu-v0.18.5.4/monero-wallet-rpc
+```
+
+Adjust extracted paths. The check generates two disposable offline wallets and
+isolated HOME/XDG/cwd under the guest's `/tmp`; it tests native GUI normal and
+portable settings, a GUI wallet switch to a path containing spaces, accented and
+non-BMP characters, and RPC explicit configuration/direct selection with no real
+funds or host profiles. Logs and wallet data stay in the guest. Enumeration is restricted to
+the launched wallet PID to isolate protected unrelated session processes. GUI
+interaction uses the fixed English v0.18.5.4 layout and reads back actual
+Qt-written settings, including UTF-16 surrogate escapes. A failed GUI check saves
+a screenshot beside its logs; other versions/layouts may require updating the
+test coordinates. Unit tests cover durable activation across selection changes.
+
 `tests/test_execution.py` exercises the lifecycle, durable state, worker claims,
 literal command execution, output bounds, exits/signals, monitor recovery,
 independent watch slots, pending reconfirmation, retry-delay persistence,

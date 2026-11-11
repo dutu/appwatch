@@ -114,7 +114,7 @@ def prepare_config(
         if matcher["exe_realpath"] is not None:
             matcher["exe_realpath"] = path(matcher["exe_realpath"])
         for entry in matcher["entrypoints"]:
-            if entry["kind"] != "java_main":
+            if entry["kind"] not in ("java_main", "executable_name"):
                 entry["value"] = path(entry["value"])
         # Environment predicates compare literal process values, not canonical paths.
         matcher["env_eq"] = {
