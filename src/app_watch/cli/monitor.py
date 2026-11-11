@@ -114,5 +114,6 @@ def run_worker(selection: str) -> int:
     request = store.read_request(attempt_id)
     if request is not None:
         logging.basicConfig(level=request.log_level.upper())
-    receipt = exec_worker(store, attempt_id, scope=scope)
-    return 0 if receipt.outcome == "succeeded" else 1
+    exec_worker(store, attempt_id, scope=scope)
+    # A durable receipt completes the worker's job, regardless of action outcome.
+    return 0

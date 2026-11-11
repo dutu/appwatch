@@ -74,11 +74,19 @@ attempt/request association. It reads the request again under its exclusive lock
 This prevents a late worker start from executing completed history while cleanup
 is removing old claims and receipts.
 
-Receipt success means exit zero. Other exits, including 10, and signals are
-failures. A failed or uncertain action is never automatically rerun. A worker
-blocked by a final running/uncertain observation writes a blocked receipt without
+An action receipt is successful only when the command exits zero. Other exits,
+including 10, and signals are failures. A failed or uncertain action is never
+automatically rerun. A worker blocked by a final running/uncertain observation
+writes a blocked receipt without
 executing. An existing receipt is immutable, and a second worker invocation
 returns that receipt rather than executing again.
+
+The worker service exits zero once an action result is durably recorded, including
+command failures, missing executables and blocked execution. A missing executable
+produces a failed receipt with a launch error and no exit code. Check app-watch
+status, notifications and the receipt for the action outcome; systemd's worker
+success means the result was recorded, not that the command succeeded. Worker
+errors, including failures to persist a receipt, still produce nonzero exits.
 
 Monitor restart preserves active work. Recovered pending requests need a fresh
 full confirmation interval. An execution slot remains occupied until a receipt

@@ -25,6 +25,8 @@ validation, executable symlink preservation, examples, and CLI errors.
 literal command execution, output bounds, exits/signals, monitor recovery,
 independent watch slots, pending reconfirmation, retry-delay persistence,
 corrupt-state isolation, history cleanup and foreground-monitor signal handling.
+CLI worker checks verify zero exits for durable success, failure, missing-command
+and blocked receipts, and nonzero exits or propagated exceptions for worker errors.
 Its real subprocesses are harmless helpers; the controller is injected so tests
 do not install services or write to the account's actual recovery directory.
 `tests/test_systemd.py` ports the source adapter's service-state and template

@@ -689,6 +689,70 @@ def test_cli_worker_rejects_arbitrary_paths(capsys):
     assert "Invalid internal worker identity" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("outcome", ["succeeded", "failed", "missing", "blocked", "signal"])
+def test_cli_worker_exits_zero_for_recorded_results(watch, store, monkeypatch, outcome):
+    from app_watch.cli import main
+
+    if outcome == "failed":
+        watch.config.action.argv = [sys.executable, "-c", "raise SystemExit(10)"]
+    elif outcome == "missing":
+        watch.config.action.argv = ["/no/such/app-watch-command"]
+    elif outcome == "signal":
+        watch.config.action.argv = [
+            sys.executable,
+            "-c",
+            "import os,signal; os.kill(os.getpid(),signal.SIGTERM)",
+        ]
+    attempt = stage(store, watch)
+    provider = FakeProvider([running(watch)] if outcome == "blocked" else [])
+    monkeypatch.setattr("app_watch.cli.monitor.state_root", lambda scope: store.root)
+    monkeypatch.setattr("app_watch.actions.worker.PsutilProcessProvider", lambda **kw: provider)
+
+    assert main(["exec-worker", f"{watch.scope}_{attempt}"]) == 0
+    receipt = store.read_receipt(attempt)
+    assert receipt is not None
+    assert receipt.outcome == ("failed" if outcome in ("missing", "signal") else outcome)
+    if outcome == "failed":
+        assert receipt.exit_code == 10
+    elif outcome == "missing":
+        assert receipt.exit_code is None and receipt.reason
+    elif outcome == "signal":
+        assert receipt.exit_code is None and receipt.signal_number == signal.SIGTERM
+    elif outcome == "blocked":
+        assert receipt.exit_code is None and receipt.reason
+        assert store.read_bytes(store.attempt_dir(attempt) / "log.txt") is None
+    else:
+        assert receipt.exit_code == 0
+    # Returning an existing immutable receipt also completes the worker's job.
+    assert main(["exec-worker", f"{watch.scope}_{attempt}"]) == 0
+    assert store.read_receipt(attempt) == receipt
+
+
+@pytest.mark.parametrize("error_type", [StateError, OSError, RuntimeError])
+def test_cli_worker_does_not_succeed_when_receipt_cannot_be_persisted(
+    watch, store, monkeypatch, capsys, error_type
+):
+    from app_watch.cli import main
+
+    attempt = stage(store, watch)
+    monkeypatch.setattr("app_watch.cli.monitor.state_root", lambda scope: store.root)
+    monkeypatch.setattr(
+        "app_watch.actions.worker.PsutilProcessProvider", lambda **kw: FakeProvider()
+    )
+
+    def fail_receipt(self, receipt):
+        raise error_type("Cannot persist receipt")
+
+    monkeypatch.setattr(StateStore, "write_receipt", fail_receipt)
+    if error_type is RuntimeError:
+        with pytest.raises(RuntimeError, match="Cannot persist receipt"):
+            main(["exec-worker", f"{watch.scope}_{attempt}"])
+    else:
+        assert main(["exec-worker", f"{watch.scope}_{attempt}"]) == 2
+        assert "Cannot persist receipt" in capsys.readouterr().err
+    assert store.read_receipt(attempt) is None
+
+
 def test_background_pipe_writer_cannot_hold_runner_forever(tmp_path):
     pid_file = tmp_path / "descendant.pid"
     writer = "import os; exec(\"while True: os.write(1,b'x'*8192)\")"
