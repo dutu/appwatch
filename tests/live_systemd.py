@@ -85,7 +85,7 @@ def main():
         "external_notifier": {"command": str(notifier)},
     }
     config.write_text(json.dumps(payload))
-    base = ["/usr/local/bin/app-watch", "--user", "--config", str(config)]
+    base = ["/usr/local/bin/app-watch", "--config", str(config)]
     unit = service_name(config)
     watch = prepare_config(load_config(config), config)
     attempts = state_root(watch.scope) / "attempts"
@@ -95,7 +95,7 @@ def main():
 
     def manage(operation):
         def attempt():
-            result = run(*base, "trigger", operation, check=False)
+            result = run(*base, operation, check=False)
             if result.returncode == 0:
                 return True
             # A live poll can briefly own the nonblocking lifecycle lock.
@@ -103,7 +103,7 @@ def main():
                 return False
             raise AssertionError(result.stderr)
 
-        wait_for(attempt, f"trigger {operation}")
+        wait_for(attempt, operation)
 
     process = None
     try:
@@ -128,7 +128,7 @@ def main():
         refusal = run("sudo", "./install.sh", "update", check=False)
         assert refusal.returncode != 0, refusal.stdout
         assert "maintenance" in refusal.stderr.lower(), refusal.stderr
-        blocked = run(*base, "trigger", "update", check=False)
+        blocked = run(*base, "update", check=False)
         assert blocked.returncode == 2
         run("systemctl", "--user", "stop", unit)
         assert (

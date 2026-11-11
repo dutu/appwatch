@@ -153,6 +153,9 @@ def test_failed_lookup_needs_positive_unit_and_job_absence(
 
 
 @pytest.mark.parametrize(
+    "worker_command", ["exec-worker", "--user trigger exec-worker", "trigger exec-worker"]
+)
+@pytest.mark.parametrize(
     "unit_state,executable_exists,ready",
     [
         ("static", True, True),
@@ -167,6 +170,7 @@ def test_template_preflight_inspects_files_and_binary_without_probe_unit(
     unit_state: str,
     executable_exists: bool,
     ready: bool,
+    worker_command: str,
 ) -> None:
     binary = tmp_path / "app-watch"
     if executable_exists:
@@ -181,12 +185,12 @@ def test_template_preflight_inspects_files_and_binary_without_probe_unit(
             assert "cat" in argv
             stdout = (
                 "[Service]\nType=oneshot\nRestart=no\nTimeoutStartSec=infinity\nUMask=0077\n"
-                f"ExecStart={binary} --user trigger exec-worker %i\n"
+                f"ExecStart={binary} {worker_command} %i\n"
             )
         return subprocess.CompletedProcess(argv, 0, stdout, "")
 
     monkeypatch.setattr("app_watch.services.systemd.subprocess.run", query)
-    assert RealSystemdController().template_ready() is ready
+    assert RealSystemdController().template_ready() is (ready and worker_command == "exec-worker")
 
 
 def test_incomplete_load_evidence_cannot_release_worker_slot(monkeypatch):

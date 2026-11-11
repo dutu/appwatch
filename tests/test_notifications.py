@@ -35,7 +35,7 @@ def test_external_notify_arguments_are_opaque(watch, tmp_path, arguments):
     document = watch.config.model_dump()
     document["external_notifier"] = {"command": str(executable)}
     watch.source_path.write_text(json.dumps(document))
-    assert main(["--user", "--config", str(watch.source_path), "notify", *arguments]) == 0
+    assert main(["--config", str(watch.source_path), "notify", *arguments]) == 0
     assert json.loads(recorded.read_text()) == arguments
     assert not (tmp_path / "SHOULD_NOT_EXIST").exists()
 
@@ -44,13 +44,13 @@ def test_external_notify_missing_program_is_best_effort_without_private_argument
     document = watch.config.model_dump()
     document["external_notifier"] = {"command": "/no/such/notifier"}
     watch.source_path.write_text(json.dumps(document))
-    assert main(["--user", "--config", str(watch.source_path), "notify", "PRIVATE_VALUE"]) == 0
+    assert main(["--config", str(watch.source_path), "notify", "PRIVATE_VALUE"]) == 0
     assert "Cannot execute external notifier" in caplog.text and "PRIVATE_VALUE" not in caplog.text
 
 
 def test_external_notifier_must_be_configured(watch, capsys):
     watch.source_path.write_text(watch.config.model_dump_json())
-    assert main(["--user", "--config", str(watch.source_path), "notify", "hello"]) == 2
+    assert main(["--config", str(watch.source_path), "notify", "hello"]) == 2
     assert "external_notifier is required" in capsys.readouterr().err
 
 
@@ -64,7 +64,7 @@ def test_external_notify_rejects_invalid_command_before_delivery(
     monkeypatch.setattr(
         "app_watch.notifications.external.notify", lambda *args: pytest.fail("must not deliver")
     )
-    assert main(["--user", "--config", str(watch.source_path), "notify", "hello"]) == 2
+    assert main(["--config", str(watch.source_path), "notify", "hello"]) == 2
     assert "one executable" in capsys.readouterr().err
 
 
@@ -73,7 +73,7 @@ def test_external_notify_rejects_nul_before_delivery(watch, monkeypatch):
         "app_watch.notifications.external.notify", lambda *args: pytest.fail("must not send")
     )
     with pytest.raises(SystemExit) as caught:
-        main(["--user", "--config", str(watch.source_path), "notify", "bad\0arg"])
+        main(["--config", str(watch.source_path), "notify", "bad\0arg"])
     assert caught.value.code == 2
 
 
@@ -125,5 +125,5 @@ def test_external_notifier_timeout_is_bounded_and_best_effort(watch, tmp_path, c
     document = watch.config.model_dump()
     document["external_notifier"] = {"command": str(executable), "timeout_seconds": 0.05}
     watch.source_path.write_text(json.dumps(document))
-    assert main(["--user", "--config", str(watch.source_path), "notify", "hello"]) == 0
+    assert main(["--config", str(watch.source_path), "notify", "hello"]) == 0
     assert "timed out after 0.05 seconds" in caplog.text

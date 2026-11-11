@@ -31,7 +31,7 @@ def run_monitor(watch: PreparedWatch, *, expected_identity: str | None = None) -
     if not watch.config.trigger.enabled:
         raise BlockedError("Set trigger.enabled to true before starting the monitor")
     if expected_identity is not None and expected_identity != watch.scope:
-        raise BlockedError("Installed monitor identity changed; use trigger update")
+        raise BlockedError("Installed monitor identity changed; use update")
     runtime_dir()
     controller = RealSystemdController()
     if not controller.manager_reachable():

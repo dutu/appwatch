@@ -56,7 +56,7 @@ For example, as the application owner:
 ```sh
 mkdir -p ~/.config/app-watch/jobs
 cp examples/electrum-trigger.yaml ~/.config/app-watch/jobs/electrum.yaml
-app-watch --user --config ~/.config/app-watch/jobs/electrum.yaml validate --schema-only
+app-watch --config ~/.config/app-watch/jobs/electrum.yaml validate --schema-only
 ```
 
 Set a unique `job.id`, the account-owned application data directory, and strong
@@ -71,7 +71,7 @@ its own work, including any backup behavior. Keep it synchronous; background
 work is outside the recorded command result.
 
 ```sh
-app-watch --user --config ~/.config/app-watch/jobs/electrum.yaml validate
+app-watch --config ~/.config/app-watch/jobs/electrum.yaml validate
 ```
 
 With triggering disabled, expect `Result: OK (configuration and paths)`.
@@ -83,10 +83,10 @@ does not run the action or certify that all wallet writers are covered.
 Set `trigger.enabled: true`, then run as the application owner, without sudo:
 
 ```sh
-app-watch --user --config ~/.config/app-watch/jobs/electrum.yaml trigger install
-app-watch --user --config ~/.config/app-watch/jobs/electrum.yaml status
-app-watch --user --config ~/.config/app-watch/jobs/electrum.yaml validate
-app-watch --user list
+app-watch --config ~/.config/app-watch/jobs/electrum.yaml install
+app-watch --config ~/.config/app-watch/jobs/electrum.yaml status
+app-watch --config ~/.config/app-watch/jobs/electrum.yaml validate
+app-watch list
 ```
 
 Installation enables and starts the monitor. Allow its first observation before
@@ -98,16 +98,16 @@ does not trigger an action. Enabled but incomplete setup reports
 After configuration edits, refresh the monitor and check health again:
 
 ```sh
-app-watch --user --config ~/.config/app-watch/jobs/electrum.yaml trigger update
-app-watch --user --config ~/.config/app-watch/jobs/electrum.yaml status --verbose
+app-watch --config ~/.config/app-watch/jobs/electrum.yaml update
+app-watch --config ~/.config/app-watch/jobs/electrum.yaml status --verbose
 ```
 
 Use the same `--param NAME=VALUE` selections when managing parametrized watches.
 To stop watching or remove its service:
 
 ```sh
-app-watch --user --config ~/.config/app-watch/jobs/electrum.yaml trigger disable
-app-watch --user --config ~/.config/app-watch/jobs/electrum.yaml trigger remove
+app-watch --config ~/.config/app-watch/jobs/electrum.yaml disable
+app-watch --config ~/.config/app-watch/jobs/electrum.yaml remove
 ```
 
 Disable/remove use the installed selection even if YAML is invalid or missing;

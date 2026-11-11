@@ -97,10 +97,10 @@ def properties(unit: str) -> dict[str, str]:
 def render_service(identity: WatchIdentity, executable: Path) -> str:
     unit = service_name(Path(identity.source_path))
     selection = {"identity": identity.model_dump(), "executable": str(executable)}
-    argv = [str(executable), "--user", "--config", identity.source_path]
+    argv = [str(executable), "--config", identity.source_path]
     for key, value in sorted(identity.params.items()):
         argv.extend(["--param", f"{key}={value}"])
-    argv.extend(["trigger", "monitor", "--expected-identity", identity.scope])
+    argv.extend(["monitor", "--expected-identity", identity.scope])
     command = " ".join(
         systemd_argument(arg, executable=index == 0) for index, arg in enumerate(argv)
     )
@@ -218,12 +218,12 @@ def verify_loaded(installed: InstalledService) -> dict[str, str]:
 
 def require_monitor_identity(watch: PreparedWatch, expected: str | None = None) -> None:
     if expected is not None and expected != watch.scope:
-        raise BlockedError("Installed monitor identity changed; use trigger update")
+        raise BlockedError("Installed monitor identity changed; use update")
     installed = find_service(watch.source_path)
     if installed is not None:
         verify_loaded(installed)
         if installed.identity.scope != watch.scope:
-            raise BlockedError("Installed execution identity differs; use trigger update")
+            raise BlockedError("Installed execution identity differs; use update")
 
 
 def require_safe_stop(identity: WatchIdentity) -> None:
@@ -254,9 +254,9 @@ def _manage_service(source: Path, action: str, *, watch: PreparedWatch | None = 
     with exclusive_lock(lock_path.with_name("service.lock")):
         installed = find_service(source)
         if action == "install" and installed is not None:
-            raise ConfigurationError("Monitor already installed; use trigger update")
+            raise ConfigurationError("Monitor already installed; use update")
         if action != "install" and installed is None:
-            raise ConfigurationError("Monitor is not installed; use trigger install")
+            raise ConfigurationError("Monitor is not installed; use install")
         content = None
         if action in ("install", "update"):
             if watch is None or not watch.config.trigger.enabled or watch.source_path != source:

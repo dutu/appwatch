@@ -56,7 +56,7 @@ paths), shell syntax, relative paths such as `./tool`, directory paths ending in
 `/`, and names beginning with `-`. Supply arguments to `notify` instead:
 
 ```sh
-app-watch --user --config /absolute/path/to/watch.yaml notify --level info 'Wallet event'
+app-watch --config /absolute/path/to/watch.yaml notify --level info 'Wallet event'
 ```
 
 Every argument after `notify` is forwarded unchanged and in order, including

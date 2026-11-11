@@ -274,18 +274,20 @@ def test_examples_validate_without_local_wallet_installations():
 def test_cli_validation_and_errors(document, tmp_path, capsys):
     path = tmp_path / "job.yaml"
     path.write_text(json.dumps(document))
-    assert main(["--user", "--config", str(path), "validate"]) == 0
+    assert main(["--config", str(path), "validate"]) == 0
     assert "configuration and paths" in capsys.readouterr().out
     document["application"]["data_dir"] = "/nonexistent/app-watch-test"
     path.write_text(json.dumps(document))
-    assert main(["--user", "--config", str(path), "validate", "--schema-only"]) == 0
-    assert main(["--user", "--config", str(path), "validate"]) == 2
+    assert main(["--config", str(path), "validate", "--schema-only"]) == 0
+    assert main(["--config", str(path), "validate"]) == 2
     assert "data_dir" in capsys.readouterr().err
 
 
-def test_cli_requires_explicit_scope_and_config():
+@pytest.mark.parametrize(
+    "command", ["validate", "monitor", "install", "update", "disable", "remove"]
+)
+def test_cli_requires_config(command, capsys):
     with pytest.raises(SystemExit) as error:
-        main(["validate"])
+        main([command])
     assert error.value.code == 2
-    with pytest.raises(SystemExit):
-        main(["--user", "validate"])
+    assert "--config is required" in capsys.readouterr().err

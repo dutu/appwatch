@@ -1,8 +1,8 @@
 # Command reference
 
-All watch commands require `--user`; watch-specific commands also require
-`--config PATH`. Put those options and repeated `--param NAME=VALUE` before the
-command. Watch management runs as the non-root application owner, without sudo.
+App-watch runs as the current account and always manages systemd user services.
+Watch-specific commands require `--config PATH`. Put that option and repeated
+`--param NAME=VALUE` before the command. Watch management runs as the non-root application owner, without sudo.
 Software setup is described in the [user guide](../README.md#requirements-and-installation).
 
 | Command | Behavior |
@@ -14,11 +14,11 @@ Software setup is described in the [user guide](../README.md#requirements-and-in
 | `status --verbose` | Include service name, recovery directory, scope, parameters and persisted state. |
 | `status --json` | Emit structured status; add `--verbose` to include details. |
 | `list` | With `--config`, list that watch; otherwise scan configured YAML files and managed installed monitors. |
-| `trigger monitor` | Monitor one enabled watch in the foreground, handling SIGINT/SIGTERM without cancelling workers. |
-| `trigger install` | Write, enable and start a new per-watch user monitor service. Refuse an existing installation. |
-| `trigger update` | Refresh, enable and restart an installed monitor after safe recovery checks. |
-| `trigger disable` | Stop and disable an installed monitor; preserve its unit and recovery state. |
-| `trigger remove` | Stop, disable and remove an installed monitor; preserve recovery state. |
+| `monitor` | Monitor one enabled watch in the foreground, handling SIGINT/SIGTERM without cancelling workers. |
+| `install` | Write, enable and start a new per-watch user monitor service. Refuse an existing installation. |
+| `update` | Refresh, enable and restart an installed monitor after safe recovery checks. |
+| `disable` | Stop and disable an installed monitor; preserve its unit and recovery state. |
+| `remove` | Stop, disable and remove an installed monitor; preserve recovery state. |
 | `notify ARGUMENTS...` | Pass all remaining arguments literally to the configured external notifier; see [notifications](notifications.md). |
 
 The internal worker service entry point is not an operator replay interface.
@@ -47,7 +47,7 @@ from final safety checks and unit replacement. Active, pending, blocked and
 unreconciled recovery records prevent lifecycle changes.
 
 Changing the job ID or effective parameters changes recovery identity. Use
-`trigger update` to transition the pinned selection after outstanding work has
+`update` to transition the pinned selection after outstanding work has
 been reconciled. Direct monitor startup refuses a different installed identity.
 Remove the old monitor before moving/renaming YAML. Recovery data is not migrated
 or erased by these commands.

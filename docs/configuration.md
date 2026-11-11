@@ -55,7 +55,7 @@ placeholders. Substitution never invokes a shell.
 For example, with `action.argv: [/usr/bin/printf, '%s\n', '{NETWORK}']`:
 
 ```sh
-app-watch --user --config /absolute/path/to/watch.yaml \
+app-watch --config /absolute/path/to/watch.yaml \
     --param NETWORK=testnet validate
 ```
 
@@ -76,15 +76,14 @@ the action executable's availability. For an enabled watch it also checks the
 worker template and manager, managed-service enablement, fresh monitoring evidence
 and dispatch warnings. Missing/incomplete setup reports `SETUP INCOMPLETE` and
 returns 2; schema/path errors and usage errors also return 2. Validation does not
-run the action or certify wallet writer coverage. These commands require explicit
-`--user` and `--config`.
+run the action or certify wallet writer coverage. These commands require `--config`.
 
 ## Foreground monitoring
 
 The implemented command is:
 
 ```text
-app-watch --user --config PATH [--param KEY=VALUE ...] trigger monitor
+app-watch --config PATH [--param KEY=VALUE ...] monitor
 ```
 
 It requires `trigger.enabled: true`, non-root execution as the application owner,

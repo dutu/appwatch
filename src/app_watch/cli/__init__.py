@@ -22,7 +22,7 @@ class _CommandParser(argparse.ArgumentParser):
             word = arguments[index]
             if word in ("--config", "--param"):
                 index += 2
-            elif word in ("--user", "--version") or word.startswith(("--config=", "--param=")):
+            elif word == "--version" or word.startswith(("--config=", "--param=")):
                 index += 1
             else:
                 break
@@ -36,9 +36,11 @@ class _CommandParser(argparse.ArgumentParser):
 
 
 def create_parser() -> argparse.ArgumentParser:
-    parser = _CommandParser(prog="app-watch", description="Application shutdown watches")
+    parser = _CommandParser(
+        prog="app-watch",
+        description="Application shutdown watches for the current account (systemd user services)",
+    )
     parser.add_argument("--version", action="version", version=f"app-watch {__version__}")
-    parser.add_argument("--user", action="store_true", help="use the application owner's account")
     parser.add_argument("--config", type=Path, help="one watch YAML file")
     parser.add_argument("--param", action="append", default=[], metavar="KEY=VALUE")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -53,24 +55,21 @@ def create_parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "notify", add_help=False, help="pass arguments to the configured external notifier"
     )
-    trigger = commands.add_parser("trigger", help="application shutdown triggering")
-    actions = trigger.add_subparsers(dest="action", required=True)
-    monitor = actions.add_parser("monitor", help="monitor one watch in the foreground")
+    monitor = commands.add_parser("monitor", help="monitor one watch in the foreground")
     monitor.add_argument("--expected-identity", help=argparse.SUPPRESS)
-    worker = actions.add_parser("exec-worker", help="internal worker service entry point")
+    worker = commands.add_parser("exec-worker", help="internal worker service entry point")
     worker.add_argument("selection")
     for action in ("install", "update", "disable", "remove"):
-        actions.add_parser(action, help=f"{action} this watch's user monitor service")
+        help_text = f"{action} this watch's user monitor service"
+        commands.add_parser(action, help=help_text, description=help_text)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
-    if not args.user:
-        parser.error("App-watch supports user execution only; put --user before the command")
     try:
-        if args.command == "trigger" and args.action == "exec-worker":
+        if args.command == "exec-worker":
             from app_watch.cli.monitor import run_worker
 
             if args.config is not None or args.param:
@@ -97,15 +96,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.config is None:
             parser.error("--config is required for this command")
-        if args.command == "trigger" and args.action in ("disable", "remove"):
+        if args.command in ("disable", "remove"):
             from app_watch.services.monitor import manage_service
 
             if params:
                 parser.error("Disable/remove recover the installed selection; omit --param")
-            manage_service(args.config, args.action)
+            manage_service(args.config, args.command)
             print(
-                f"Monitor service: {args.action.upper()}D"
-                if args.action == "remove"
+                f"Monitor service: {args.command.upper()}D"
+                if args.command == "remove"
                 else "Monitor service: DISABLED"
             )
             return 0
@@ -118,15 +117,15 @@ def main(argv: list[str] | None = None) -> int:
             logging.basicConfig(level=config.logging.level.upper())
             notify(config.external_notifier, args.arguments)
             return 0
-        if args.command == "trigger":
+        if args.command in ("monitor", "install", "update"):
             watch = prepare_config(config, args.config, runtime_params=params)
-            if args.action in ("install", "update"):
+            if args.command in ("install", "update"):
                 from app_watch.services.monitor import manage_service
 
-                manage_service(args.config, args.action, watch=watch)
+                manage_service(args.config, args.command, watch=watch)
                 print(
                     "Monitor service: INSTALLED"
-                    if args.action == "install"
+                    if args.command == "install"
                     else "Monitor service: UPDATED"
                 )
                 return 0

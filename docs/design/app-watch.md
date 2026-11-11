@@ -124,16 +124,16 @@ Preserve the familiar command structure:
 
 ```text
 app-watch --version
-app-watch --user --config PATH [--param KEY=VALUE ...] validate [--schema-only]
-app-watch --user --config PATH [--param KEY=VALUE ...] status [--json] [--verbose]
-app-watch --user list
-app-watch --user --config PATH list
-app-watch --user --config PATH [--param KEY=VALUE ...] trigger monitor
-app-watch --user --config PATH [--param KEY=VALUE ...] trigger install
-app-watch --user --config PATH [--param KEY=VALUE ...] trigger update
-app-watch --user --config PATH trigger disable
-app-watch --user --config PATH trigger remove
-app-watch --user --config PATH notify ARGUMENTS...
+app-watch --config PATH [--param KEY=VALUE ...] validate [--schema-only]
+app-watch --config PATH [--param KEY=VALUE ...] status [--json] [--verbose]
+app-watch list
+app-watch --config PATH list
+app-watch --config PATH [--param KEY=VALUE ...] monitor
+app-watch --config PATH [--param KEY=VALUE ...] install
+app-watch --config PATH [--param KEY=VALUE ...] update
+app-watch --config PATH disable
+app-watch --config PATH remove
+app-watch --config PATH notify ARGUMENTS...
 ```
 
 No-config listing discovers the user's configured job files and installed managed

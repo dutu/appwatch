@@ -685,7 +685,7 @@ def test_monitor_cli_preflight_and_signal_handlers(watch, store, tmp_path, monke
 def test_cli_worker_rejects_arbitrary_paths(capsys):
     from app_watch.cli import main
 
-    assert main(["--user", "trigger", "exec-worker", "../../request.json"]) == 2
+    assert main(["exec-worker", "../../request.json"]) == 2
     assert "Invalid internal worker identity" in capsys.readouterr().err
 
 

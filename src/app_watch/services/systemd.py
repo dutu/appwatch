@@ -279,7 +279,7 @@ class RealSystemdController:
             argv = shlex.split(commands[0])
         except ValueError:
             return False
-        if len(argv) != 5 or argv[1:] != ["--user", "trigger", "exec-worker", "%i"]:
+        if len(argv) != 3 or argv[1:] != ["exec-worker", "%i"]:
             return False
         executable = Path(argv[0])
         return (

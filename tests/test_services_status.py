@@ -405,24 +405,24 @@ def test_offline_inventory_still_lists_local_watches(watch, manager):
 
 def test_status_json_and_cli_disable_do_not_require_valid_yaml(watch, manager, capsys):
     install(watch)
-    assert main(["--user", "--config", str(watch.source_path), "status", "--json"]) == 0
+    assert main(["--config", str(watch.source_path), "status", "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["configuration"] == "INVALID" and "details" not in result
-    assert main(["--user", "--config", str(watch.source_path), "trigger", "disable"]) == 0
+    assert main(["--config", str(watch.source_path), "disable"]) == 0
     assert "DISABLED" in capsys.readouterr().out
-    assert main(["--user", "--config", str(watch.source_path), "trigger", "remove"]) == 0
+    assert main(["--config", str(watch.source_path), "remove"]) == 0
     assert "REMOVED" in capsys.readouterr().out
 
 
 def test_enabled_validation_reports_setup_incomplete_then_health(watch, manager, capsys):
     save_watch(watch)
-    assert main(["--user", "--config", str(watch.source_path), "validate"]) == 2
+    assert main(["--config", str(watch.source_path), "validate"]) == 2
     assert "SETUP INCOMPLETE" in capsys.readouterr().out
     install(watch)
     store = recovery_store(watch)
     with monitor_lock(monitor_lock_path(watch.source_path)):
         observed_state(watch, store)
-        assert main(["--user", "--config", str(watch.source_path), "validate"]) == 0
+        assert main(["--config", str(watch.source_path), "validate"]) == 0
     assert "Result: OK" in capsys.readouterr().out
 
 

@@ -117,7 +117,7 @@ def watch_status(source: Path, *, runtime_params: dict[str, str] | None = None) 
             identity = watch.identity
         if identity.scope != watch.scope:
             result["diagnostics"].append(
-                "Installed execution identity differs from YAML/parameters; use trigger update"
+                "Installed execution identity differs from YAML/parameters; use update"
             )
         result["details"]["selected_scope"] = watch.scope
         result["details"]["application_name"] = watch.config.application.name

@@ -558,7 +558,6 @@ class Installer:
                 self.host.run(
                     [
                         str(release / "venv/bin/app-watch"),
-                        "--user",
                         "--config",
                         str(path),
                         "validate",
