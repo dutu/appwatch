@@ -28,13 +28,18 @@ def main():
     before = user_records()
     assert before, "Run the live service check first to leave disposable recovery evidence"
     run("sudo", "./install.sh", "uninstall")
+    policy = Path("/etc/sudoers.d") / (
+        "app-watch-" + hashlib.sha256(b"/opt/app-watch").hexdigest()[:16]
+    )
+    assert not Path("/opt/app-watch/process-inspect").exists()
+    run("sudo", "test", "!", "-e", str(policy))
     assert not Path("/usr/local/bin/app-watch").exists()
     assert not Path("/etc/systemd/user/app-watch-exec@.service").exists()
     assert not list(Path("/opt/app-watch/releases").iterdir())
     run("sudo", "test", "-f", "/opt/app-watch/install-manifest.json")
     run("sudo", "./install.sh", "uninstall", "--purge")
     run("sudo", "test", "!", "-e", "/opt/app-watch/install-manifest.json")
-    custom_prefix = Path("/opt") / ("app-watch-custom-" + uuid4().hex[:8])
+    custom_prefix = Path("/opt") / ("app-watch custom-" + uuid4().hex[:8])
     custom = [
         "sudo",
         "env",
@@ -47,10 +52,27 @@ def main():
     assert not custom_prefix.exists()
     run(*custom, "install")
     run("/usr/local/bin/app-watch-custom", "--version")
+    inspected = run(
+        "sudo",
+        "/usr/sbin/runuser",
+        "-u",
+        "nobody",
+        "--",
+        "/usr/bin/sudo",
+        "-n",
+        "--",
+        str(custom_prefix / "process-inspect"),
+    )
+    assert '"uid": 65534' in inspected.stdout
     worker = Path("/etc/systemd/user/app-watch-exec@.service").read_text()
     assert 'ExecStart="/usr/local/bin/app-watch-custom" ' in worker
     run(*custom, "update")
     run(*custom, "uninstall", "--purge")
+    custom_policy = policy.with_name(
+        "app-watch-" + hashlib.sha256(os.fsencode(custom_prefix)).hexdigest()[:16]
+    )
+    assert not (custom_prefix / "process-inspect").exists()
+    run("sudo", "test", "!", "-e", str(custom_policy))
     assert not Path("/usr/local/bin/app-watch-custom").exists()
     assert user_records() == before, "Uninstall must preserve user records byte for byte"
     # Leave the normal installation available for further checks in the running VM.

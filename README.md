@@ -9,7 +9,7 @@ worker. Arguments are passed literally, without a shell. Failed or uncertain
 actions are never automatically replayed. See [recovery](docs/recovery.md) for
 the execution guarantees and limits.
 
-This is version `0.1.0.dev0`. Process matchers must be reviewed against the actual
+This is version `0.1.0`. Process matchers must be reviewed against the actual
 installed application's GUI and daemon writers; the examples are disabled
 templates, not verified installation presets.
 
@@ -23,13 +23,13 @@ notifications additionally require that user's graphical notification session.
 From a trusted source checkout, inspect the destination and install:
 
 ```sh
-./install.sh install --dry-run
+sudo ./install.sh install --dry-run
 sudo ./install.sh install
 app-watch --version
 ```
 
-The installer provisions Python/venv, systemd, D-Bus user-session support and
-`libnotify-bin` on fresh installation. It creates a dedicated environment with
+The installer provisions Python/venv, systemd, D-Bus user-session support,
+`libnotify-bin` and sudo on fresh installation. It creates a dedicated environment with
 hash-locked dependencies, validates the staged release and shared worker unit,
 and activates it only after safety checks. Installing software starts no watch.
 
@@ -38,13 +38,26 @@ and activates it only after safety checks. Installing software starts no watch.
 | Releases and installer records | `/opt/app-watch/` |
 | Stable command | `/usr/local/bin/app-watch` |
 | Shared worker template | `/etc/systemd/user/app-watch-exec@.service` |
+| Read-only process inspection helper | `/opt/app-watch/process-inspect` |
+| Helper authorization | `/etc/sudoers.d/app-watch-*` |
 | Suggested watch files | `~/.config/app-watch/jobs/` |
+
+Protected same-user processes can hide executable paths from an ordinary user.
+App-watch uses its installed helper through noninteractive sudo only when that
+read is denied. The helper returns executable paths and process start times for
+the invoking user's processes; it accepts no arguments or file paths and reads
+no wallet settings or environment. Monitoring and actions still run as the
+application owner. If inspection cannot be verified, shutdown remains blocked.
+The installer manages, verifies and removes both the helper and its sudo rule.
+Installer dry-runs also require root to inspect the protected sudoers directory.
 
 For custom destinations, set `APP_WATCH_INSTALL_PREFIX`, `APP_WATCH_BIN_LINK`
 and `APP_WATCH_USER_SYSTEMD_ROOT` with `sudo env NAME=value ... ./install.sh ...`.
 Use the same settings for every operation. Paths must be absolute, trusted,
 nonoverlapping and safely owned; the unit root must be in systemd's user-unit
-search path. The binary path cannot contain shell/systemd metacharacters.
+search path. The binary path cannot contain shell/systemd metacharacters. The
+installation prefix cannot contain `*`, `?`, brackets or backslashes, so its sudo
+rule always names an exact helper path.
 Never select VaultKeep's installation paths.
 
 ## Configure and validate a watch

@@ -80,9 +80,13 @@ activation but restarts confirmation. A worker blocked by a new process retains
 the existing blocked-receipt/no-automatic-retry behavior.
 
 Deleted running executables remain guards: a potentially matching ` (deleted)`
-target reports inspection unavailable until it exits. Any same-user process with
-unreadable executable identity can also prevent confirmation, including protected
-session services; app-watch cannot safely assume that such a process is unrelated.
+target reports inspection unavailable until it exits. For protected same-user
+processes, the software installer's read-only helper retrieves executable paths
+through noninteractive sudo. Process ownership and start times are verified;
+process names and argv are never fallback identity evidence. If the helper is
+missing, denied, times out, or cannot verify an identity, confirmation remains
+blocked. Use the software installer to provision the helper; pip alone does not
+install it. Do not work around inspection failures by ignoring process names.
 
 Native Linux GUI/RPC is supported. Tails persistence, Flatpak/AppImage confinement,
 Qt organization/system settings fallback, RPC `wallet-dir`/`generate-from-json`

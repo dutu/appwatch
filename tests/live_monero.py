@@ -20,15 +20,6 @@ from app_watch.process import (
 )
 
 
-class SmokeProvider(PsutilProcessProvider):
-    """Isolate launched wallets from unrelated protected VM session processes."""
-
-    pids: set[int]
-
-    def snapshot(self):
-        return [proc for proc in super().snapshot() if proc.pid in self.pids]
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gui", type=Path, required=True)
@@ -79,8 +70,7 @@ def main():
             for name in ("monero-wallet-gui", "monero-wallet-rpc")
         )
     )
-    provider = SmokeProvider()
-    provider.pids = set()
+    provider = PsutilProcessProvider()
 
     def observe(directory=wallets):
         return detect_spec(
@@ -93,7 +83,7 @@ def main():
             if predicate():
                 return
             time.sleep(0.2)
-        raise AssertionError(f"Timed out: {description}; see {root}")
+        raise AssertionError(f"Timed out: {description}; observation={observe()}; see {root}")
 
     def switch_gui_wallet(process):
         def xdo(*arguments):
@@ -163,7 +153,7 @@ def main():
         )
 
     def run_case(label, command, interaction=None):
-        assert observe().observation == Observation.STOPPED
+        wait_for(lambda: observe().observation == Observation.STOPPED, f"{label}: initial absence")
         with (root / f"{label}.log").open("w") as output:
             process = subprocess.Popen(
                 command,
@@ -174,7 +164,6 @@ def main():
                 stderr=output,
                 start_new_session=True,
             )
-            provider.pids.add(process.pid)
             try:
                 deadline = time.monotonic() + 30
                 while time.monotonic() < deadline:
@@ -207,8 +196,7 @@ def main():
                     except subprocess.TimeoutExpired:
                         os.killpg(process.pid, signal.SIGKILL)
                         process.wait(timeout=5)
-                provider.pids.clear()
-        assert observe().observation == Observation.STOPPED
+        wait_for(lambda: observe().observation == Observation.STOPPED, f"{label}: final absence")
 
     settings = (
         f"[General]\nwallet_path={wallet}\nuseRemoteNode=true\ncheckForUpdates=false\n"
@@ -241,7 +229,7 @@ def main():
             "--offline",
         ],
     )
-    print(f"Isolated native smoke checks passed; guest-only disposable data/logs: {root}")
+    print(f"Full-scan native smoke checks passed; guest-only disposable data/logs: {root}")
 
 
 if __name__ == "__main__":

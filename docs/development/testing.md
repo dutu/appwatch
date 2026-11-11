@@ -26,9 +26,11 @@ and portable settings, Qt scalar parsing, RPC wallet/config options, changing
 wallet selection, the shared process guard, recovery, pending reconfirmation,
 and final worker blocking. It includes real Linux unlink regressions using
 copied harmless native binaries named for GUI/RPC, and bounded regular-file
-reader checks. Those integration cases isolate their process enumeration from
-unrelated VM session services; unreadable same-user executable identities in a
-full scan correctly prevent shutdown confirmation.
+reader checks. The focused unlink cases isolate the test process. The installed
+`tests/live_inspection.py` check exercises an unrestricted production scan with
+protected session services and a deliberately non-dumpable wallet helper.
+`tests/test_process_inspection.py` covers caller ownership, PID reuse, deletion
+markers, malformed responses, timeouts and helper argument/privilege restrictions.
 
 For the opt-in native Monero check, extract the official GUI and CLI distributions
 inside the guest, outside the synchronized checkout. Install `xvfb`, `xauth`,
@@ -47,8 +49,9 @@ Adjust extracted paths. The check generates two disposable offline wallets and
 isolated HOME/XDG/cwd under the guest's `/tmp`; it tests native GUI normal and
 portable settings, a GUI wallet switch to a path containing spaces, accented and
 non-BMP characters, and RPC explicit configuration/direct selection with no real
-funds or host profiles. Logs and wallet data stay in the guest. Enumeration is restricted to
-the launched wallet PID to isolate protected unrelated session processes. GUI
+funds or host profiles. Logs and wallet data stay in the guest. Enumeration uses
+the full production provider, including its installed privileged helper. Run the
+software installer first so that the helper and its authorization are present. GUI
 interaction uses the fixed English v0.18.5.4 layout and reads back actual
 Qt-written settings, including UTF-16 surrogate escapes. A failed GUI check saves
 a screenshot beside its logs; other versions/layouts may require updating the
@@ -100,6 +103,7 @@ For the opt-in real systemd deployment check, install only in the disposable VM:
 
 ```sh
 codex-vm test -- sudo ./install.sh install
+codex-vm test -- /opt/app-watch/current/venv/bin/python tests/live_inspection.py
 codex-vm test -- /opt/app-watch/current/venv/bin/python tests/live_systemd.py
 ```
 

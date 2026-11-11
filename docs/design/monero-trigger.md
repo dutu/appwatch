@@ -260,8 +260,17 @@ indefinitely by design. Deleting or editing configuration never establishes
 shutdown while a matched process exists.
 
 Any same-user process with unreadable executable identity prevents a verified
-stopped result. This includes protected session services on some systems; the
-adapter cannot establish that an uninspectable executable is unrelated.
+stopped result. Protected session services are inspected through the installed
+read-only privileged helper, never excluded by process name or command line.
+The standalone helper runs under isolated system Python, accepts no arguments,
+derives the caller's UID from sudo, and returns only that UID's kernel executable
+paths and process start times. It rechecks ownership and start ticks around the
+read. The caller verifies start time and liveness before accepting a path,
+preserving deletion markers. Missing, denied, malformed, wrong-owner, stale or
+timed-out results provide no identity evidence. The helper has a 4 MiB output
+limit and a two-second client deadline. Environment, settings and actions remain
+unprivileged. Installer ownership, staging, rollback and uninstall cover the
+helper and its no-arguments sudo rule, including upgrades from pre-helper layouts.
 
 ## Implementation and verification
 

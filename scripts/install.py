@@ -152,6 +152,7 @@ class Layout:
     prefix: Path
     binary: Path
     user_systemd: Path
+    sudoers_root: Path = Path("/etc/sudoers.d")
 
     @classmethod
     def environment(cls) -> Layout:
@@ -162,7 +163,7 @@ class Layout:
         )
 
     def validate(self, uid: int) -> None:
-        for path in (self.prefix, self.binary, self.user_systemd):
+        for path in (self.prefix, self.binary, self.user_systemd, self.sudoers_root):
             value = str(path)
             if (
                 not path.is_absolute()
@@ -174,6 +175,10 @@ class Layout:
                 )
         if any(char in str(self.binary) for char in "'\"\\$%"):
             raise InstallError("Stable command path must not contain quotes, backslashes, $ or %")
+        if any(char in str(self.prefix) for char in "*?[]\\"):
+            raise InstallError(
+                "Installation prefix must not contain sudoers wildcards or backslashes"
+            )
         roots = (self.prefix, self.binary.parent, self.user_systemd)
         if any(path == Path("/") for path in roots):
             raise InstallError("Installer roots must not be filesystem root")
@@ -183,6 +188,7 @@ class Layout:
                     raise InstallError("Installer roots must not overlap")
         for root in roots:
             safe_directory(root, uid)
+        safe_directory(self.sudoers_root, uid)
 
     @property
     def manifest(self) -> Path:
@@ -199,6 +205,19 @@ class Layout:
     @property
     def worker(self) -> Path:
         return self.user_systemd / "app-watch-exec@.service"
+
+    @property
+    def inspector(self) -> Path:
+        return self.prefix / "process-inspect"
+
+    @property
+    def sudoers(self) -> Path:
+        suffix = hashlib.sha256(os.fsencode(self.prefix)).hexdigest()[:16]
+        return self.sudoers_root / f"app-watch-{suffix}"
+
+    @property
+    def resources(self) -> tuple[Path, ...]:
+        return self.worker, self.binary, self.current, self.inspector, self.sudoers
 
     def document(self) -> dict:
         return {
@@ -282,6 +301,7 @@ class Host:
                 "systemd",
                 "dbus-user-session",
                 "libnotify-bin",
+                "sudo",
             ]
         )
 
@@ -312,6 +332,11 @@ class Host:
         )
         self.run([python, "-m", "pip", "check"])
 
+    def ensure_inspection_support(self) -> None:
+        if not Path("/usr/bin/sudo").is_file() or not Path("/usr/sbin/visudo").is_file():
+            self.run(["apt-get", "update"])
+            self.run(["apt-get", "install", "-y", "--no-upgrade", "sudo"])
+
     def verify_unit(self, content: str) -> None:
         with tempfile.TemporaryDirectory(prefix="app-watch-unit-check-") as directory:
             root = Path(directory)
@@ -330,6 +355,12 @@ class Host:
                 ["systemd-analyze", "--user", "verify", str(unit)],
                 env=dict(os.environ, XDG_RUNTIME_DIR=str(runtime)),
             )
+
+    def verify_sudoers(self, content: str) -> None:
+        with tempfile.TemporaryDirectory(prefix="app-watch-sudoers-check-") as directory:
+            policy = Path(directory) / "policy"
+            policy.write_text(content)
+            self.run(["/usr/sbin/visudo", "-cf", str(policy)])
 
     def accounts(self) -> list[dict]:
         specs = []
@@ -441,7 +472,7 @@ class Installer:
         if overrides.exists() or overrides.is_symlink():
             raise InstallError("Shared worker has unmanaged overrides; review them first")
         if manifest is None:
-            for path in (self.layout.current, self.layout.binary, self.layout.worker):
+            for path in self.layout.resources:
                 if path.exists() or path.is_symlink():
                     raise InstallError(f"Existing unmanaged installation resource: {path}")
             return
@@ -453,16 +484,22 @@ class Installer:
             raise InstallError("Malformed installation manifest")
         if manifest.get("layout") != self.layout.document():
             raise InstallError("Installed layout differs; use the original installation paths")
-        expected_paths = {
+        legacy_paths = {
             str(self.layout.current),
             str(self.layout.binary),
             str(self.layout.worker),
         }
+        expected_paths = {str(path) for path in self.layout.resources}
         active = manifest.get("active_release")
         if active is not None and not isinstance(active, str):
             raise InstallError("Malformed active release identity")
-        if set(manifest["files"]) != (expected_paths if active is not None else set()):
+        allowed_paths = (expected_paths, legacy_paths) if active is not None else (set(),)
+        if set(manifest["files"]) not in allowed_paths:
             raise InstallError("Manifest contains unexpected managed paths")
+        # Upgrades from the pre-helper layout must not overwrite unowned resources.
+        for path in self.layout.resources:
+            if str(path) not in manifest["files"] and (path.exists() or path.is_symlink()):
+                raise InstallError(f"Existing unmanaged installation resource: {path}")
         for name, expected in manifest["files"].items():
             path = Path(name)
             if path.lstat().st_uid != self.host.owner_uid or record(path) != expected:
@@ -565,6 +602,7 @@ class Installer:
                     ]
                 )
             self.host.verify_unit(self.worker_content(release))
+            self.host.verify_sudoers(self.sudoers_content())
             for resource in (release, *release.rglob("*")):
                 if not resource.is_symlink():
                     resource.chmod(stat.S_IMODE(resource.stat().st_mode) & ~0o022)
@@ -636,7 +674,7 @@ class Installer:
         releases = dict(old["releases"]) if old else {}
         if release is not None:
             releases[release.name] = tree_records(release)
-        paths = (self.layout.current, self.layout.binary, self.layout.worker) if release else ()
+        paths = self.layout.resources if release else ()
         return {
             "schema_version": 1,
             "layout": self.layout.document(),
@@ -647,15 +685,28 @@ class Installer:
 
     def activate(self, release: Path | None) -> None:
         if release is None:
-            for path in (self.layout.binary, self.layout.worker, self.layout.current):
+            # Withdraw root authorization before removing executable resources.
+            for path in (self.layout.sudoers, *self.layout.resources[:-1]):
                 path.unlink(missing_ok=True)
                 sync_dir(path.parent)
             return
         # Render the fixed shared worker template for this installation's stable command.
         worker = self.worker_content(release)
+        write_file(
+            self.layout.inspector, (release / "src/scripts/process_inspect.py").read_bytes(), 0o755
+        )
+        write_file(self.layout.sudoers, self.sudoers_content().encode(), 0o440)
         write_file(self.layout.worker, worker.encode(), 0o644)
         write_link(self.layout.current, str(release))
         write_link(self.layout.binary, str(self.layout.current / "venv/bin/app-watch"))
+
+    def sudoers_content(self) -> str:
+        # sudoers command paths escape whitespace and grammar metacharacters.
+        path = re.sub(r"([\\\s,:=#!])", r"\\\1", str(self.layout.inspector))
+        return (
+            "# App-watch read-only process identity; no command arguments permitted.\n"
+            f'ALL ALL=(root) NOPASSWD: NOSETENV: {path} ""\n'
+        )
 
     def worker_content(self, release: Path) -> str:
         escaped = str(self.layout.binary).replace('"', '\\"')
@@ -670,7 +721,7 @@ class Installer:
 
     def restore_global(self, journal: dict) -> None:
         before = journal["before"]
-        for path in (self.layout.worker, self.layout.binary, self.layout.current):
+        for path in self.layout.resources:
             item = before.get(str(path))
             if item is None:
                 path.unlink(missing_ok=True)
@@ -697,7 +748,7 @@ class Installer:
         self.validate_manifest(manifest)
         helper = release or self.layout.prefix / "releases" / manifest["active_release"]
         before = {}
-        for path in (self.layout.worker, self.layout.binary, self.layout.current):
+        for path in self.layout.resources:
             if path.exists() or path.is_symlink():
                 item = record(path)
                 if item["kind"] == "file":
@@ -785,7 +836,7 @@ class Installer:
 
     def cleanup_uninstalled(self, journal: dict) -> None:
         """Finish committed software deletion; missing files are allowed after a crash."""
-        for path in (self.layout.worker, self.layout.binary, self.layout.current):
+        for path in self.layout.resources:
             if path.exists() or path.is_symlink():
                 raise InstallError("Uninstalled resources reappeared; refusing cleanup")
         previous = journal["old_manifest"]
@@ -846,7 +897,19 @@ class Installer:
                     "target": str(self.layout.current / "venv/bin/app-watch"),
                 },
             }
-        for path in (self.layout.worker, self.layout.current, self.layout.binary):
+            # An interrupted pre-helper release never activated these resources.
+            if (candidate / "src/scripts/process_inspect.py").exists():
+                after[str(self.layout.inspector)] = {
+                    "kind": "file",
+                    "sha256": digest(candidate / "src/scripts/process_inspect.py"),
+                    "mode": 0o755,
+                }
+                after[str(self.layout.sudoers)] = {
+                    "kind": "file",
+                    "sha256": hashlib.sha256(self.sudoers_content().encode()).hexdigest(),
+                    "mode": 0o440,
+                }
+        for path in self.layout.resources:
             current = record(path) if path.exists() or path.is_symlink() else None
             before = journal["before"].get(str(path))
             if before is not None:
@@ -989,6 +1052,7 @@ class Installer:
                 if action != "uninstall":
                     if manifest is None:
                         self.host.provision()
+                    self.host.ensure_inspection_support()
                     release = self.build_release()
                 helper = release or self.layout.prefix / "releases" / manifest["active_release"]
                 snapshot_helper = helper
@@ -1029,8 +1093,10 @@ def main() -> int:
         parser.error("--purge is only valid with uninstall")
     if sys.version_info < (3, 13):  # noqa: UP036 - bootstrap must diagnose old system Python
         parser.error("Python 3.13 or newer is required")
-    if os.geteuid() != 0 and not args.dry_run:
-        parser.error("Software installation requires root; use sudo ./install.sh")
+    if os.geteuid() != 0:
+        parser.error(
+            "Software installation, including dry-run, requires root; use sudo ./install.sh"
+        )
     try:
         Installer(Path(__file__).resolve().parent.parent, Layout.environment(), Host()).execute(
             args.action,

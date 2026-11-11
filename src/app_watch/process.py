@@ -18,6 +18,7 @@ from typing import Any, Protocol
 import psutil
 
 from app_watch.apps.registry import get_adapter
+from app_watch.process_inspection import protected_executables
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +225,7 @@ class PsutilProcessProvider:
     def snapshot(self) -> list[ProcessInfo]:
         infos: list[ProcessInfo] = []
         seen: dict[int, float] = {}
+        protected: set[int] = set()
         for proc in psutil.process_iter(["pid", "uids"]):
             info = proc.info
             pid = proc.pid
@@ -246,6 +248,9 @@ class PsutilProcessProvider:
                 # Avoid psutil's cached executable path surviving unlink/replacement.
                 # Preserve the kernel's deletion marker for conservative matching.
                 exe = os.readlink(f"/proc/{pid}/exe")
+            except PermissionError:
+                exe = None
+                protected.add(pid)
             except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
                 exe = None
             if not self.alive(pid, float(create_time)):
@@ -260,6 +265,16 @@ class PsutilProcessProvider:
                 )
             )
             seen[pid] = float(create_time)
+        if protected:
+            verified = protected_executables(self.owner_uid)
+            for index, info in enumerate(infos):
+                identity = verified.get(info.pid) if info.pid in protected else None
+                if (
+                    identity is not None
+                    and identity[0] == info.create_time
+                    and self.alive(info.pid, info.create_time)
+                ):
+                    infos[index] = replace(info, exe_realpath=identity[1])
         self._last = seen
         return infos
 

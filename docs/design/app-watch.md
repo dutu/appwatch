@@ -19,8 +19,10 @@ Provide installation, update, uninstallation, YAML configuration and examples,
 runtime parameter settings, validation, watch listing, status, notifications,
 foreground monitoring, and systemd user-service management. Follow VaultKeep's
 operator workflow where it applies to triggers. Monitoring and action execution
-run as the application owner, without root or sudo. System-wide software
-installation may require administrator privileges, as in VaultKeep.
+run as the non-root application owner. A narrowly scoped read-only helper uses
+noninteractive sudo to identify protected same-user executables; it does not
+execute actions or read wallet settings. System-wide software installation
+requires administrator privileges.
 
 Exclude sources, destinations, archives, encryption, retention, backup
 verification, backup lifecycle hooks, timers, and schedules. An external command

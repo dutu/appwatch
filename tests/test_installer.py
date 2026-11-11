@@ -44,6 +44,12 @@ class ControlledHost(Host):
     def verify_unit(self, content):
         self.calls.append("verify-unit")
 
+    def verify_sudoers(self, content):
+        self.calls.append("verify-sudoers")
+
+    def ensure_inspection_support(self):
+        pass
+
     def accounts(self):
         return [self.account]
 
@@ -114,7 +120,12 @@ def installation(tmp_path, monkeypatch, manager):
         },
     }
     host = ControlledHost(account)
-    layout = Layout(tmp_path / "software", tmp_path / "bin/app-watch", tmp_path / "shared-units")
+    layout = Layout(
+        tmp_path / "software",
+        tmp_path / "bin/app-watch",
+        tmp_path / "shared-units",
+        tmp_path / "sudoers.d",
+    )
     monkeypatch.setattr(service, "command_path", lambda: layout.binary)
     return Installer(ROOT, layout, host), manager
 
@@ -161,6 +172,18 @@ def test_dry_run_is_read_only_for_fresh_and_installed_tree(installation):
     assert os.readlink(installer.layout.current) == selected
 
 
+@pytest.mark.parametrize("character", ["*", "?", "[", "]", "\\"])
+def test_inspector_prefix_cannot_expand_sudo_authorization(tmp_path, character):
+    layout = Layout(
+        tmp_path / f"software{character}",
+        tmp_path / "bin/app-watch",
+        tmp_path / "units",
+        tmp_path / "sudoers.d",
+    )
+    with pytest.raises(InstallError, match="sudoers wildcards or backslashes"):
+        layout.validate(os.geteuid())
+
+
 @pytest.mark.parametrize("invalid", ["yaml", "pending", "orphan", "modified-unit"])
 def test_preflight_rejects_invalid_or_protected_watches(installation, watch, invalid):
     installer, manager = installation
@@ -190,7 +213,7 @@ def test_preflight_rejects_invalid_or_protected_watches(installation, watch, inv
     assert not installer.layout.journal.exists()
 
 
-@pytest.mark.parametrize("resource", ["release", "command", "template"])
+@pytest.mark.parametrize("resource", ["release", "command", "template", "inspector", "sudoers"])
 def test_modified_managed_files_are_preserved(installation, resource):
     installer, _ = installation
     installer.execute("install")
@@ -199,8 +222,11 @@ def test_modified_managed_files_are_preserved(installation, resource):
     elif resource == "command":
         installer.layout.binary.unlink()
         path = installer.layout.binary
-    else:
+    elif resource == "template":
         path = installer.layout.worker
+    else:
+        path = getattr(installer.layout, resource)
+        path.chmod(0o600)
     path.write_text("operator change")
     with pytest.raises(InstallError):
         installer.execute("update")
@@ -213,16 +239,40 @@ def test_failure_before_and_after_activation_rolls_back(installation, watch):
     unit = add_watch(installer, watch)
     previous = os.readlink(installer.layout.current)
     previous_manifest = installer.layout.manifest.read_bytes()
+    previous_inspector = installer.layout.inspector.read_bytes()
+    previous_policy = installer.layout.sudoers.read_bytes()
     installer.host.fail = "refresh"
     with pytest.raises(InstallError):
         installer.execute("update")
     assert os.readlink(installer.layout.current) == previous
     assert installer.layout.manifest.read_bytes() == previous_manifest
+    assert installer.layout.inspector.read_bytes() == previous_inspector
+    assert installer.layout.sudoers.read_bytes() == previous_policy
     assert unit in manager.active and not installer.layout.journal.exists()
     installer.host.after_resume = lambda: None
     with pytest.raises(InstallError):
         installer.execute("update")
     assert os.readlink(installer.layout.current) == previous and unit in manager.active
+
+
+def test_upgrade_from_layout_without_inspector_and_safe_rollback(installation):
+    installer, _ = installation
+    installer.execute("install")
+    manifest = json.loads(installer.layout.manifest.read_bytes())
+    for path in (installer.layout.inspector, installer.layout.sudoers):
+        del manifest["files"][str(path)]
+        path.unlink()
+    installer.layout.manifest.write_text(json.dumps(manifest))
+    installer.host.fail = "refresh"
+    with pytest.raises(InstallError):
+        installer.execute("update")
+    assert not installer.layout.inspector.exists() and not installer.layout.sudoers.exists()
+    installer.execute("update")
+    assert installer.layout.inspector.stat().st_mode & 0o777 == 0o755
+    assert installer.layout.sudoers.stat().st_mode & 0o777 == 0o440
+    assert f'{installer.layout.inspector} ""' in installer.layout.sudoers.read_text()
+    installer.execute("uninstall")
+    assert not installer.layout.inspector.exists() and not installer.layout.sudoers.exists()
 
 
 def test_unsafe_rollback_preserves_candidate_and_recovers_on_next_run(installation, watch):
@@ -302,7 +352,7 @@ def test_real_locked_environment_and_standalone_installed_command(
         text=True,
         check=True,
     )
-    assert result.stdout.strip() == "app-watch 0.1.0.dev0"
+    assert result.stdout.strip() == "app-watch 0.1.0"
     metadata = json.loads((installer.layout.current / "deployment.json").read_text())
     assert metadata["layout"]["APP_WATCH_BIN_LINK"] == str(installer.layout.binary)
     installer.execute("uninstall", purge=True)

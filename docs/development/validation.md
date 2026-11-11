@@ -8,7 +8,7 @@ VaultKeep working tree remains unchanged.
 ## Automated and package checks
 
 - Python 3.13.5; systemd 257.13.
-- 486 automated tests pass, including the real hash-locked environment build and
+- 517 automated tests pass, including the real hash-locked environment build and
   installed command invocation outside the checkout.
 - Ruff lint and format checks cover `src`, `tests` and `scripts`.
 - Wheel and source distribution build successfully. The installed package has
@@ -74,7 +74,7 @@ the installed launch model and must be checked locally after wallet upgrades.
 
 ## Monero trigger validation
 
-The Monero implementation passed the complete 486-test suite, Ruff lint and
+The Monero implementation passed the complete 517-test suite, Ruff lint and
 format checks, wheel/source-distribution builds, and `pip check` inside the
 disposable Debian VM. Coverage includes executable names across versions and
 directories, settings changes on a continuing PID, remembered activation,
@@ -85,7 +85,8 @@ copied harmless native executables named for both GUI/RPC while they remain
 alive and verify that detection and worker execution stay blocked.
 
 `tests/live_monero.py` also passed against official native GUI/CLI v0.18.5.4
-distributions downloaded into the guest. It generated two disposable offline
+distributions downloaded into the guest, using the full production scan and
+installed helper with no PID filtering. It generated two disposable offline
 wallets and isolated HOME/XDG/cwd, then verified GUI normal settings, GUI portable
 settings taking precedence over a conflicting normal file, and RPC explicit
 `--config-file` and direct `--wallet-file` selection. It unlocked the first wallet
@@ -97,13 +98,19 @@ original directory. Each launched process was detected running and
 then absent after termination. Wallet data and logs remained only in guest
 temporary directories; no existing wallets, host profiles, or funds were used.
 
-Native checks restrict observation to launched wallet PIDs. The full VM scan
-contains protected same-user session processes (`systemd`, `sd-pam`, SSH) whose
-executable metadata cannot be read. The conservative production policy correctly
-reports inspection unavailable in that situation, so these smoke checks do not
-establish that unrestricted shutdown confirmation works on that session setup.
-Unreadable identities can indefinitely delay actions; they are not silently
-excluded. Native GUI automation uses the fixed English v0.18.5.4 layout; other
+The production provider uses the installed read-only privileged helper to resolve
+executable paths hidden by protected same-user session processes (`systemd`,
+`sd-pam`, SSH). `tests/live_inspection.py` passed with an unrestricted scan: a
+deliberately non-dumpable helper named `monero-wallet-rpc` armed the real monitor,
+blocked execution while alive, and allowed a successful unprivileged worker
+receipt after exit. It also verified caller-only results and rejected argument
+and `SUDO_UID` overrides using an account without general sudo rights. Unit
+coverage checks PID reuse, exact start times, process exit during inspection,
+deleted paths, malformed output and timeouts. Installer tests cover helper/policy
+ownership, legacy-layout upgrades, rollback and removal. Unverified executable
+identities still block confirmation rather than being ignored.
+
+Native GUI automation uses the fixed English v0.18.5.4 layout; other
 versions/layouts may require changes to the test coordinates. These checks do
 not certify backup consistency or close the race between final inspection and
 a wallet restarting.
