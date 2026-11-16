@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 from contextlib import ExitStack, contextmanager
@@ -46,20 +47,78 @@ class InstallError(RuntimeError):
     pass
 
 
-def report_field(label: str, value: object) -> None:
-    print(f"  {label:<23} {value}", flush=True)
+class InstallReport:
+    """VaultKeep's console format, without changing deployment or log storage."""
 
+    def __init__(self, *, no_color: bool = False):
+        self.no_color = no_color
+        self.failed_stage = "installation"
 
-@contextmanager
-def report_stage(label: str):
-    started = time.monotonic()
-    report_field(label, "RUNNING")
-    try:
-        yield
-    except BaseException:
-        report_field(label, f"FAILED ({time.monotonic() - started:.1f}s)")
-        raise
-    report_field(label, f"OK ({time.monotonic() - started:.1f}s)")
+    @staticmethod
+    def terminal(stream) -> bool:
+        return stream.isatty() and os.environ.get("TERM", "dumb") != "dumb"
+
+    def color(self, value: object, stream=None) -> str:
+        stream = sys.stdout if stream is None else stream
+        colors = {
+            "OK": "32",
+            "VALID": "32",
+            "INSTALLED": "32",
+            "WARNING": "1;33",
+            "SETUP INCOMPLETE": "1;33",
+            "FAILED": "1;31",
+            "ERROR": "1;31",
+            "RUNNING...": "36",
+        }
+        color = colors.get(value) if isinstance(value, str) else None
+        if color and not self.no_color and not os.environ.get("NO_COLOR") and self.terminal(stream):
+            return f"\033[{color}m{value}\033[0m"
+        return str(value)
+
+    def field(self, label: str, value: object) -> None:
+        print(f"  {label:<23} {self.color(value)}", flush=True)
+
+    def stage_line(self, label: str, state: str, elapsed: int) -> None:
+        terminal = self.terminal(sys.stdout)
+        print(
+            f"{'\r\033[2K' if terminal else ''}  {label:<23} {self.color(state)} ({elapsed}s)",
+            end="" if terminal and state == "RUNNING..." else "\n",
+            flush=True,
+        )
+
+    @contextmanager
+    def stage(self, label: str):
+        started = time.monotonic()
+        stopped = threading.Event()
+
+        def heartbeat():
+            next_report = 10
+            while not stopped.wait(1):
+                elapsed = int(time.monotonic() - started)
+                if self.terminal(sys.stdout) or elapsed >= next_report:
+                    self.stage_line(label, "RUNNING...", elapsed)
+                    next_report = (elapsed // 10 + 1) * 10
+
+        self.stage_line(label, "RUNNING...", 0)
+        worker = threading.Thread(target=heartbeat, daemon=True)
+        worker.start()
+        state = "OK"
+        try:
+            yield
+        except BaseException:
+            self.failed_stage = label
+            state = "FAILED"
+            raise
+        finally:
+            stopped.set()
+            worker.join()
+            self.stage_line(label, state, int(time.monotonic() - started))
+
+    def failure(self, error: Exception, log: Path | None) -> None:
+        print(f"Issue: {self.failed_stage}\n       {error}", file=sys.stderr, flush=True)
+        print(f"\nResult: {self.color('FAILED')}", flush=True)
+        if log is not None:
+            print(f"Diagnostics: {log}", file=sys.stderr, flush=True)
 
 
 def acquire_install_lock(fd: int, *, timeout: float = 15.0) -> None:
@@ -459,6 +518,7 @@ class Host:
 class Installer:
     def __init__(self, source: Path, layout: Layout, host: Host):
         self.source, self.layout, self.host = source.resolve(), layout, host
+        self.report = InstallReport()
 
     def read_json(self, path: Path) -> dict | None:
         try:
@@ -647,6 +707,32 @@ class Installer:
             }
             for account in accounts
         ]
+
+    @staticmethod
+    def report_jobs(plans: list[dict]) -> None:
+        rows = [
+            (
+                item["account"]["name"],
+                unit["identity"]["job_id"],
+                "Trigger",
+                "Resumed" if unit["was_active"] else "Left inactive",
+            )
+            for item in plans
+            for unit in item["plan"]["units"]
+        ]
+        if not rows:
+            print("No existing managed jobs to refresh.", flush=True)
+            return
+        print(f"Managed jobs refreshed and validated: {len(rows)}\n", flush=True)
+        headers = ("Owner", "Job instance", "Automation", "Outcome")
+        widths = [max(len(row[index]) for row in [headers, *rows]) for index in range(len(headers))]
+        for row in [headers, *sorted(rows)]:
+            print(
+                "  ".join(
+                    value.ljust(width) for value, width in zip(row, widths, strict=True)
+                ).rstrip(),
+                flush=True,
+            )
 
     def users(self, release: Path, plans: list[dict], action: str, **options) -> None:
         for item in plans:
@@ -993,47 +1079,74 @@ class Installer:
     def execute(self, action: str, *, dry_run: bool = False, purge: bool = False) -> None:
         if action not in {"install", "update", "uninstall"} or (purge and action != "uninstall"):
             raise InstallError("Invalid installation action or purge option")
-        title = {"install": "Installation", "update": "Update", "uninstall": "Uninstallation"}
-        print(f"App-watch — {title[action]}\n", flush=True)
-        print(f"Source:    {self.source}", flush=True)
-        print(f"\n{title[action]} plan", flush=True)
-        report_field("Installation", self.layout.prefix)
-        report_field("Executable", self.layout.binary)
-        report_field("Worker template", self.layout.worker)
-        report_field("Existing user data", "preserved")
-        report_field(
-            "Watch monitors",
-            "remove managed services"
-            if action == "uninstall"
-            else "refresh existing; no new watches",
-        )
-        if purge:
-            report_field("Installer receipt", "remove")
-        print("\nChecking setup", flush=True)
-        if action != "uninstall":
-            self.host.check_platform()
-            self.source_files()
-        self.layout.validate(self.host.owner_uid)
-        manifest = self.read_json(self.layout.manifest)
-        interrupted = self.read_json(self.layout.journal)
-        if interrupted is not None and dry_run:
-            raise InstallError(
-                "Interrupted installation needs safe rollback; dry-run made no changes"
+        title = "Uninstallation" if action == "uninstall" else "Installation"
+        print(f"App-watch — {title}\n", flush=True)
+        if not dry_run:
+            print(f"Diagnostics: {self.layout.prefix / 'install.log'}\n", flush=True)
+        with ExitStack() as preflight:
+            if not dry_run:
+                preflight.enter_context(self.report.stage("Preflight"))
+            if action != "uninstall":
+                self.host.check_platform()
+                self.source_files()
+            self.layout.validate(self.host.owner_uid)
+            manifest = self.read_json(self.layout.manifest)
+            interrupted = self.read_json(self.layout.journal)
+            if interrupted is not None and dry_run:
+                raise InstallError(
+                    "Interrupted installation needs safe rollback; dry-run made no changes"
+                )
+            if interrupted is None:
+                self.validate_manifest(manifest)
+            if (
+                interrupted is None
+                and (
+                    manifest is None or (action == "update" and manifest["active_release"] is None)
+                )
+                and action in ("update", "uninstall")
+            ):
+                raise InstallError(f"{action} requires a managed installation")
+            version = previous = "none"
+            if action != "uninstall":
+                version = tomllib.loads((self.source / "pyproject.toml").read_text())["project"][
+                    "version"
+                ]
+                if interrupted is not None:
+                    previous = "unknown (interrupted transaction)"
+                elif manifest and manifest["active_release"]:
+                    deployment = (
+                        self.layout.prefix
+                        / "releases"
+                        / manifest["active_release"]
+                        / "deployment.json"
+                    )
+                    previous = json.loads(deployment.read_bytes())["version"]
+        if action == "uninstall":
+            print(
+                "Uninstallation plan\n  User configuration and recovery evidence are preserved.",
+                flush=True,
             )
-        if interrupted is None:
-            self.validate_manifest(manifest)
-        if (
-            interrupted is None
-            and (manifest is None or (action == "update" and manifest["active_release"] is None))
-            and action in ("update", "uninstall")
-        ):
-            raise InstallError(f"{action} requires a managed installation")
+            self.report.field("Configuration/state", "preserved")
+            if purge:
+                self.report.field("Installer receipt", "remove")
+        else:
+            print(
+                f"Source:    {self.source}\nVersion:   {version}\nPrevious:  {previous}", flush=True
+            )
+            print("\nInstallation plan", flush=True)
+            self.report.field("Installation", self.layout.prefix)
+            self.report.field("Python", "3.13+")
+            self.report.field("Trigger support", "included (opt-in)")
+            self.report.field("Existing data", "preserved")
+            self.report.field("Monitors", "automatic pause and resume")
         if dry_run:
             if manifest and manifest["active_release"]:
                 helper = self.layout.prefix / "releases" / manifest["active_release"]
                 self.snapshots(helper, self.host.accounts(), validate_config=action != "uninstall")
             print("\nResult: dry run completed; no changes made", flush=True)
             return
+        if action != "uninstall":
+            print("\nInstalling", flush=True)
         self.layout.prefix.mkdir(mode=0o755, parents=True, exist_ok=True)
         fd = os.open(
             self.layout.prefix / "install.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644
@@ -1047,10 +1160,9 @@ class Installer:
                 or info.st_mode & 0o022
             ):
                 raise InstallError("Installer lock is not safely owned")
-            with report_stage("Deployment lock"):
+            with self.report.stage("Deployment lock and activity"):
                 acquire_install_lock(fd)
             self.host.log = self.layout.prefix / "install.log"
-            print(f"Diagnostics: {self.host.log}", flush=True)
             if interrupted is not None:
                 candidate = Path(interrupted["candidate"]) if interrupted.get("candidate") else None
                 if candidate is not None and self.source.is_relative_to(candidate):
@@ -1061,7 +1173,7 @@ class Installer:
                         target.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(path, target)
                     self.source = copied
-                with report_stage("Interrupted transaction"):
+                with self.report.stage("Interrupted transaction"):
                     self.recover(interrupted)
                 manifest = self.read_json(self.layout.manifest)
             # Revalidate after taking the cross-process installation lock.
@@ -1072,38 +1184,38 @@ class Installer:
                 if purge:
                     self.layout.manifest.unlink(missing_ok=True)
                     sync_dir(self.layout.prefix)
-                print("\nResult: UNINSTALLED", flush=True)
-                print("User configuration and recovery data preserved.", flush=True)
+                print(
+                    "\nResult: uninstalled; user configuration and recovery data preserved",
+                    flush=True,
+                )
+                print(f"Diagnostics: {self.host.log}", flush=True)
                 return
             if action == "update" and (manifest is None or manifest["active_release"] is None):
                 raise InstallError("update requires an active managed installation")
             accounts = self.host.accounts()
             if manifest and manifest["active_release"]:
                 old_helper = self.layout.prefix / "releases" / manifest["active_release"]
-                with report_stage("Existing watch checks"):
+                with self.report.stage("Safety checks"):
                     self.snapshots(old_helper, accounts, validate_config=action != "uninstall")
-            release = version = None
+            release = None
             try:
                 if action != "uninstall":
-                    with report_stage("System dependencies"):
+                    with self.report.stage("System dependencies"):
                         if manifest is None:
                             self.host.provision()
                         self.host.ensure_inspection_support()
-                    with report_stage("Build and validation"):
+                    with self.report.stage("Release staging"):
                         release = self.build_release()
-                        version = tomllib.loads((release / "src/pyproject.toml").read_text())[
-                            "project"
-                        ]["version"]
                 helper = release or self.layout.prefix / "releases" / manifest["active_release"]
                 snapshot_helper = helper
                 if manifest and manifest["active_release"]:
                     snapshot_helper = self.layout.prefix / "releases" / manifest["active_release"]
-                with report_stage("Watch safety checks"):
+                with self.report.stage("Runtime safety checks"):
                     plans = self.snapshots(
                         snapshot_helper, accounts, validate_config=action != "uninstall"
                     )
-                with report_stage(
-                    "Remove and refresh" if action == "uninstall" else "Activate and refresh"
+                with self.report.stage(
+                    "Uninstallation" if action == "uninstall" else "Release activation"
                 ):
                     self.transaction(action, manifest, release, plans, purge=purge)
             except BaseException:
@@ -1115,23 +1227,19 @@ class Installer:
                 ):
                     shutil.rmtree(release)
                 raise
-            result = {"install": "INSTALLED", "update": "UPDATED", "uninstall": "UNINSTALLED"}
-            print(f"\nResult: {result[action]}\n", flush=True)
             if release is not None:
-                report_field("Version", version)
-                report_field("Executable", self.layout.binary)
-                report_field(
+                print(f"\nResult: {self.report.color('INSTALLED')}\n", flush=True)
+                self.report.field("Version", version)
+                self.report.field("Executable", self.layout.binary)
+                self.report.field(
                     "Previous release",
                     "retained" if manifest and manifest["active_release"] else "none",
                 )
-            report_field("Managed watches", sum(len(item["plan"]["units"]) for item in plans))
-            print("\nUser configuration and recovery data preserved.", flush=True)
-            if action != "uninstall":
+                print(flush=True)
+                self.report_jobs(plans)
+            else:
                 print(
-                    "New watches require setup as the application owner, without sudo:\n"
-                    f"  {self.layout.binary} --config /path/to/watch.yaml install\n"
-                    f"  {self.layout.binary} --config /path/to/watch.yaml status\n"
-                    f"  {self.layout.binary} --config /path/to/watch.yaml validate",
+                    "\nResult: uninstalled; user configuration and recovery data preserved",
                     flush=True,
                 )
             print(f"Diagnostics: {self.host.log}", flush=True)
@@ -1145,7 +1253,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Install, update or uninstall App-watch")
     parser.add_argument("action", choices=("install", "update", "uninstall"))
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--no-color", action="store_true", help="output is always plain text")
+    parser.add_argument("--no-color", action="store_true", help="disable colored status output")
     parser.add_argument(
         "--purge",
         action="store_true",
@@ -1160,8 +1268,10 @@ def main() -> int:
         parser.error(
             "Software installation, including dry-run, requires root; use sudo ./install.sh"
         )
+    installer = Installer(Path(__file__).resolve().parent.parent, Layout.environment(), Host())
+    installer.report.no_color = args.no_color
     try:
-        Installer(Path(__file__).resolve().parent.parent, Layout.environment(), Host()).execute(
+        installer.execute(
             args.action,
             dry_run=args.dry_run,
             purge=args.purge,
@@ -1175,7 +1285,7 @@ def main() -> int:
         TypeError,
         AttributeError,
     ) as error:
-        print(f"Issue: {error}\n\nResult: FAILED", file=sys.stderr)
+        installer.report.failure(error, installer.host.log)
         return 1
     return 0
 

@@ -16,7 +16,14 @@ from app_watch.errors import BlockedError, ConfigurationError, StateError
 from app_watch.services import monitor as service
 from app_watch.trigger.models import InstanceState
 from app_watch.trigger.state import StateStore as StateStoreForTest
-from scripts.install import Host, Installer, InstallError, Layout, acquire_install_lock
+from scripts.install import (
+    Host,
+    Installer,
+    InstallError,
+    InstallReport,
+    Layout,
+    acquire_install_lock,
+)
 from tests.test_execution import request_for
 from tests.test_execution import watch as watch
 from tests.test_services_status import manager as manager
@@ -136,7 +143,9 @@ def add_watch(installer, watch):
     return service.service_name(watch.source_path)
 
 
-def test_fresh_install_starts_no_watches_and_reinstall_update_uninstall(installation, watch):
+def test_fresh_install_starts_no_watches_and_reinstall_update_uninstall(
+    installation, watch, capsys
+):
     installer, manager = installation
     installer.execute("install")
     first = installer.layout.current.resolve()
@@ -145,14 +154,26 @@ def test_fresh_install_starts_no_watches_and_reinstall_update_uninstall(installa
     unit = add_watch(installer, watch)
     store = recovery_store(watch)
     store.write_instance(InstanceState(instance_id=watch.config.job.id))
+    capsys.readouterr()
     installer.execute("update")
+    output = capsys.readouterr().out
+    assert "App-watch — Installation" in output
+    assert "Result: INSTALLED" in output
+    assert "Previous:  0.1.0" in output
+    assert "Managed jobs refreshed and validated: 1" in output
+    assert "Owner" in output and "Job instance" in output and "Automation" in output
+    assert "test-owner" in output and watch.config.job.id in output and "Resumed" in output
     second = installer.layout.current.resolve()
     assert second != first and first.exists()
     assert unit in manager.active and unit in manager.enabled
     assert service.read_service(unit).executable == installer.layout.binary
     installer.execute("install")
     assert installer.layout.current.resolve() != second
+    capsys.readouterr()
     installer.execute("uninstall")
+    output = capsys.readouterr().out
+    assert "App-watch — Uninstallation" in output
+    assert "Result: uninstalled; user configuration and recovery data preserved" in output
     assert not installer.layout.binary.exists() and not installer.layout.worker.exists()
     assert not (service.units_root() / unit).exists()
     assert watch.source_path.exists() and store.root.exists()
@@ -169,6 +190,7 @@ def test_dry_run_is_read_only_for_fresh_and_installed_tree(installation, capsys)
     assert str(installer.layout.prefix) in output
     assert "Result: dry run completed; no changes made" in output
     assert "Result: INSTALLED" not in output
+    assert "RUNNING..." not in output and "Diagnostics:" not in output
     installer.execute("install")
     before = installer.layout.manifest.read_bytes()
     selected = os.readlink(installer.layout.current)
@@ -177,16 +199,18 @@ def test_dry_run_is_read_only_for_fresh_and_installed_tree(installation, capsys)
     assert os.readlink(installer.layout.current) == selected
 
 
-def test_install_output_explains_watch_setup(installation, capsys):
+def test_install_output_matches_vaultkeep_layout(installation, capsys):
     installer, _ = installation
     installer.execute("install")
     output = capsys.readouterr().out
     assert "App-watch — Installation" in output
-    assert "Build and validation    OK (" in output
+    assert "Release staging         RUNNING... (0s)" in output
+    assert "Release staging         OK (" in output
     assert "Result: INSTALLED" in output
-    assert "Managed watches         0" in output
-    assert "without sudo" in output
-    assert f"{installer.layout.binary} --config /path/to/watch.yaml install" in output
+    assert "No existing managed jobs to refresh." in output
+    assert "Previous:  none\n\nInstallation plan" in output
+    assert "\nInstalling\n" in output
+    assert "\033[" not in output
     assert f"Diagnostics: {installer.layout.prefix / 'install.log'}" in output
 
 
@@ -200,9 +224,44 @@ def test_install_output_reports_failed_stage(installation, monkeypatch, capsys):
     with pytest.raises(InstallError, match="simulated build failure"):
         installer.execute("install")
     output = capsys.readouterr().out
-    assert "Build and validation    FAILED (" in output
+    assert "Release staging         FAILED (" in output
     assert "Result: INSTALLED" not in output
     assert not installer.layout.current.exists()
+    installer.report.failure(InstallError("simulated build failure"), installer.host.log)
+    captured = capsys.readouterr()
+    assert captured.out == "\nResult: FAILED\n"
+    assert "Issue: Release staging\n       simulated build failure\n" in captured.err
+    assert f"Diagnostics: {installer.host.log}" in captured.err
+
+
+@pytest.mark.parametrize(
+    "no_color,env_color,colored", [(False, "", True), (True, "", False), (False, "1", False)]
+)
+def test_terminal_stage_output_and_color_controls(monkeypatch, no_color, env_color, colored):
+    class Terminal(io.StringIO):
+        def isatty(self):
+            return True
+
+    output = Terminal()
+    monkeypatch.setattr(sys, "stdout", output)
+    monkeypatch.setenv("TERM", "xterm")
+    monkeypatch.setenv("NO_COLOR", env_color)
+    report = InstallReport(no_color=no_color)
+    report.stage_line("Release staging", "RUNNING...", 10)
+    assert output.getvalue().startswith("\r\033[2K  Release staging")
+    assert not output.getvalue().endswith("\n")
+    report.stage_line("Release staging", "OK", 11)
+    assert output.getvalue().endswith(" (11s)\n")
+    assert ("\033[36mRUNNING...\033[0m" in output.getvalue()) is colored
+    assert ("\033[32mOK\033[0m" in output.getvalue()) is colored
+
+
+def test_dumb_terminal_uses_plain_lines(monkeypatch):
+    output = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", output)
+    monkeypatch.setenv("TERM", "dumb")
+    InstallReport().stage_line("Preflight", "RUNNING...", 0)
+    assert output.getvalue() == "  Preflight               RUNNING... (0s)\n"
 
 
 @pytest.mark.parametrize("character", ["*", "?", "[", "]", "\\"])

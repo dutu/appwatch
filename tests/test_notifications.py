@@ -24,7 +24,8 @@ from tests.test_execution import watch as watch
         ["", "space word", "a\nb", "--", "-x", "$(touch SHOULD_NOT_EXIST)"],
     ],
 )
-def test_external_notify_arguments_are_opaque(watch, tmp_path, arguments):
+@pytest.mark.parametrize("options", [[], ["--no-color"]])
+def test_external_notify_arguments_are_opaque(watch, tmp_path, arguments, options):
     recorded = tmp_path / "arguments.json"
     executable = tmp_path / "notifier"
     executable.write_text(
@@ -35,7 +36,7 @@ def test_external_notify_arguments_are_opaque(watch, tmp_path, arguments):
     document = watch.config.model_dump()
     document["external_notifier"] = {"command": str(executable)}
     watch.source_path.write_text(json.dumps(document))
-    assert main(["--config", str(watch.source_path), "notify", *arguments]) == 0
+    assert main([*options, "--config", str(watch.source_path), "notify", *arguments]) == 0
     assert json.loads(recorded.read_text()) == arguments
     assert not (tmp_path / "SHOULD_NOT_EXIST").exists()
 

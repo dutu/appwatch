@@ -409,9 +409,9 @@ def test_status_json_and_cli_disable_do_not_require_valid_yaml(watch, manager, c
     result = json.loads(capsys.readouterr().out)
     assert result["configuration"] == "INVALID" and "details" not in result
     assert main(["--config", str(watch.source_path), "disable"]) == 0
-    assert "DISABLED" in capsys.readouterr().out
+    assert capsys.readouterr().out == "Trigger disable:  OK\n"
     assert main(["--config", str(watch.source_path), "remove"]) == 0
-    assert "REMOVED" in capsys.readouterr().out
+    assert capsys.readouterr().out == "Trigger remove:  OK\n"
 
 
 def test_enabled_validation_reports_setup_incomplete_then_health(watch, manager, capsys):

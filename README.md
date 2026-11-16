@@ -32,10 +32,12 @@ The installer provisions Python/venv, systemd, D-Bus user-session support,
 `libnotify-bin` and sudo on fresh installation. It creates a dedicated environment with
 hash-locked dependencies, validates the staged release and shared worker unit,
 and activates it only after safety checks. Installing software starts no watch.
-The installer displays its plan, stage results and a final summary with the
-diagnostics log path. After installation it prints the commands for setting up
-each new watch as the application owner, without sudo. Dry-runs show the plan
-without changing the installation.
+The installer displays its plan, stage progress and a final summary with the
+diagnostics log path and existing managed jobs. Terminal progress refreshes in
+place; redirected output uses plain lines with periodic progress updates.
+Use `--no-color` or `NO_COLOR=1` to disable status colors. Dry-runs show the plan
+without changing the installation. Install and start each new watch separately
+as described in [Enable and operate](#enable-and-operate).
 
 | Resource | Default path |
 | --- | --- |

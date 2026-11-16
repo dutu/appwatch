@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import io
 import json
 import shlex
+import sys
 from pathlib import Path
 
 import pytest
 
 from app_watch.cli import create_parser, main
+from app_watch.errors import BlockedError
 from app_watch.services import monitor as service
 from tests.test_execution import watch as watch
 
@@ -27,7 +30,7 @@ def test_help_describes_current_account_and_flat_commands():
 
 
 @pytest.mark.parametrize("command", ["install", "update"])
-def test_flat_service_commands_prepare_watch(watch, monkeypatch, command):
+def test_flat_service_commands_prepare_watch(watch, monkeypatch, command, capsys):
     watch.source_path.write_text(json.dumps(watch.config.model_dump()))
     calls = []
     monkeypatch.setattr(service, "manage_service", lambda *args, **kw: calls.append((args, kw)))
@@ -35,6 +38,61 @@ def test_flat_service_commands_prepare_watch(watch, monkeypatch, command):
     args, kwargs = calls.pop()
     assert args == (watch.source_path, command)
     assert kwargs["watch"].scope == watch.scope
+    captured = capsys.readouterr()
+    assert captured.out == f"Trigger {command}:  OK\n"
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("command", ["disable", "remove"])
+def test_service_recovery_commands_use_same_output(watch, monkeypatch, command, capsys):
+    calls = []
+    monkeypatch.setattr(service, "manage_service", lambda *args, **kw: calls.append((args, kw)))
+    assert main(["--config", str(watch.source_path), command]) == 0
+    assert calls == [((watch.source_path, command), {})]
+    captured = capsys.readouterr()
+    assert captured.out == f"Trigger {command}:  OK\n"
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("command", ["install", "update", "disable", "remove"])
+def test_service_failure_uses_vaultkeep_diagnostic(watch, monkeypatch, command, capsys):
+    watch.source_path.write_text(json.dumps(watch.config.model_dump()))
+
+    def fail(*args, **kwargs):
+        raise BlockedError("systemd user manager is unavailable")
+
+    monkeypatch.setattr(service, "manage_service", fail)
+    assert main(["--config", str(watch.source_path), command]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "FAILED: BlockedError: systemd user manager is unavailable\n"
+
+
+@pytest.mark.parametrize(
+    "no_color,env_color,colored", [(False, "", True), (True, "", False), (False, "1", False)]
+)
+def test_install_colors_and_opt_out(watch, monkeypatch, no_color, env_color, colored):
+    class Terminal(io.StringIO):
+        def isatty(self):
+            return True
+
+    output, errors = Terminal(), Terminal()
+    monkeypatch.setattr(sys, "stdout", output)
+    monkeypatch.setattr(sys, "stderr", errors)
+    monkeypatch.setenv("TERM", "xterm")
+    monkeypatch.setenv("NO_COLOR", env_color)
+    watch.source_path.write_text(json.dumps(watch.config.model_dump()))
+    monkeypatch.setattr(service, "manage_service", lambda *args, **kw: None)
+    argv = ["--no-color"] if no_color else []
+    argv += ["--config", str(watch.source_path), "install"]
+    assert main(argv) == 0
+    status = "\033[32mOK\033[0m" if colored else "OK"
+    assert output.getvalue() == f"Trigger install:  {status}\n"
+    # Failed config loading uses the same stderr color controls.
+    watch.source_path.unlink()
+    assert main(argv) == 2
+    prefix = "\033[1;31mFAILED\033[0m" if colored else "FAILED"
+    assert errors.getvalue().startswith(f"{prefix}: ConfigurationError:")
 
 
 def test_flat_monitor_passes_pinned_identity(watch, monkeypatch):

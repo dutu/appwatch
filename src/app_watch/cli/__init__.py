@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from app_watch import __version__
+from app_watch.cli.output import service_error, service_result
 from app_watch.config import load_config, prepare_config
 from app_watch.config.runtime import parse_parameters
 from app_watch.errors import BlockedError, ConfigurationError, StateError
@@ -22,7 +23,7 @@ class _CommandParser(argparse.ArgumentParser):
             word = arguments[index]
             if word in ("--config", "--param"):
                 index += 2
-            elif word == "--version" or word.startswith(("--config=", "--param=")):
+            elif word in ("--version", "--no-color") or word.startswith(("--config=", "--param=")):
                 index += 1
             else:
                 break
@@ -41,6 +42,9 @@ def create_parser() -> argparse.ArgumentParser:
         description="Application shutdown watches for the current account (systemd user services)",
     )
     parser.add_argument("--version", action="version", version=f"app-watch {__version__}")
+    parser.add_argument(
+        "--no-color", action="store_true", help="disable colored service command output"
+    )
     parser.add_argument("--config", type=Path, help="one watch YAML file")
     parser.add_argument("--param", action="append", default=[], metavar="KEY=VALUE")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -102,11 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             if params:
                 parser.error("Disable/remove recover the installed selection; omit --param")
             manage_service(args.config, args.command)
-            print(
-                f"Monitor service: {args.command.upper()}D"
-                if args.command == "remove"
-                else "Monitor service: DISABLED"
-            )
+            service_result(args.command, no_color=args.no_color)
             return 0
         config = load_config(args.config)
         if args.command == "notify":
@@ -123,11 +123,7 @@ def main(argv: list[str] | None = None) -> int:
                 from app_watch.services.monitor import manage_service
 
                 manage_service(args.config, args.command, watch=watch)
-                print(
-                    "Monitor service: INSTALLED"
-                    if args.command == "install"
-                    else "Monitor service: UPDATED"
-                )
+                service_result(args.command, no_color=args.no_color)
                 return 0
             from app_watch.cli.monitor import run_monitor
 
@@ -172,7 +168,10 @@ def main(argv: list[str] | None = None) -> int:
         category = (
             "Configuration error" if isinstance(error, ConfigurationError) else "App-watch error"
         )
-        print(f"{category}: {message}", file=sys.stderr)
+        if args.command in ("install", "update", "disable", "remove"):
+            service_error(f"{type(error).__name__}: {message}", no_color=args.no_color)
+        else:
+            print(f"{category}: {message}", file=sys.stderr)
         return 2
     print(
         "Result: OK (schema only)"

@@ -5,6 +5,12 @@ Watch-specific commands require `--config PATH`. Put that option and repeated
 `--param NAME=VALUE` before the command. Watch management runs as the non-root application owner, without sudo.
 Software setup is described in the [user guide](../README.md#requirements-and-installation).
 
+Watch service commands report success as `Trigger install:  OK` (or the matching
+`update`, `disable`, or `remove` action). Failures report `FAILED: TYPE: MESSAGE`
+on stderr and return 2. Status words use color on supported terminals; redirected
+output is plain text. Set `NO_COLOR=1` or put `--no-color` before the command to
+disable colors, for example `app-watch --no-color --config watch.yaml install`.
+
 | Command | Behavior |
 | --- | --- |
 | `app-watch --version` | Show the package version. |
