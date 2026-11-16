@@ -927,3 +927,86 @@ def test_action_output_is_logged_only_when_configured(watch, store, caplog, incl
     assert receipt.outcome == "succeeded"
     assert ("PRIVATE_ACTION_OUTPUT" in caplog.text) is include_output
     assert b"PRIVATE_ACTION_OUTPUT" in (store.attempt_dir(attempt) / "log.txt").read_bytes()
+
+
+def test_monitor_notifies_application_transitions_separately(watch, store, tmp_path, monkeypatch):
+    from threading import Event
+
+    from app_watch.cli.monitor import run_monitor
+
+    watch.config.desktop_notifications.trigger.enabled = True
+    observations = iter(
+        [
+            Observation.STOPPED,
+            Observation.RUNNING,
+            Observation.RUNNING,
+            Observation.STOPPED,
+            Observation.STOPPED,
+            Observation.STOPPED,
+            Observation.RUNNING,
+            Observation.AMBIGUOUS,
+            Observation.INSPECTION_UNAVAILABLE,
+        ]
+    )
+    calls = []
+
+    class RecordingNotifier:
+        def notify(self, title, body, **kwargs):
+            calls.append((title, body, kwargs))
+
+        def close(self):
+            pass
+
+    class StopAfterObservations(Event):
+        ticks = 0
+
+        def wait(self, timeout=None):
+            self.ticks += 1
+            if self.ticks == 9:
+                self.set()
+            return self.is_set()
+
+    class ReadyManager(Manager):
+        def manager_reachable(self):
+            return True
+
+        def template_ready(self):
+            return True
+
+    class ClockedMonitor(Monitor):
+        ticks = 0
+
+        def tick(self):
+            self.ticks += 1
+            return super().tick(monotonic_now=self.ticks * 5)
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr("app_watch.cli.monitor.Event", StopAfterObservations)
+    monkeypatch.setattr("app_watch.cli.monitor.Monitor", ClockedMonitor)
+    monkeypatch.setattr("app_watch.cli.monitor.RealSystemdController", ReadyManager)
+    monkeypatch.setattr("app_watch.cli.monitor.AsyncSystemdController", nullcontext)
+    monkeypatch.setattr("app_watch.cli.monitor.state_root", lambda scope: store.root)
+    monkeypatch.setattr("app_watch.cli.monitor.require_monitor_identity", lambda *args: None)
+    monkeypatch.setattr("app_watch.cli.monitor.build_notifier", lambda config: RecordingNotifier())
+    monkeypatch.setattr(
+        "app_watch.trigger.monitor.detect_spec", lambda **kwargs: observation(next(observations))
+    )
+
+    assert run_monitor(watch, expected_identity=watch.scope) == 0
+    transitions = [call for call in calls if call[0] == "App-watch: Application state changed"]
+    labels = [
+        "NOT RUNNING → RUNNING",
+        "RUNNING → CONFIRMING STOP",
+        "CONFIRMING STOP → HAS STOPPED",
+        "HAS STOPPED → RUNNING",
+        "RUNNING → AMBIGUOUS",
+        "AMBIGUOUS → INSPECTION UNAVAILABLE",
+    ]
+    assert [body for _, body, _ in transitions] == [
+        f"{watch.config.job.id}: Application {label}" for label in labels
+    ]
+    # No replacement key: command progress cannot overwrite state transitions.
+    assert all(options == {} for _, _, options in transitions)
+    assert any("External command submitted" in body for _, body, _ in calls)

@@ -23,7 +23,13 @@ service. App-watch checks local Unix-socket peer ownership, prefers a working
 configured/user bus, and otherwise requires an unambiguous desktop bus. It does
 not import another session's environment into systemd or create a new D-Bus bus.
 
-Notifications cover confirmed shutdown, command submission, success/failure,
+After the first observation establishes a baseline, separate notifications report
+changes in the application state shown by `status`, such as
+`RUNNING → CONFIRMING STOP → HAS STOPPED`. Unchanged observations do not repeat
+notifications. These messages are independent of command progress and are not replaced by it. Monitor
+restart establishes a new baseline without replaying previous transitions.
+
+Lifecycle notifications cover confirmed shutdown, command submission, success/failure,
 blocked final checks, recovery blocks, advisory overdue work and pending-request
 supersession. Bodies include the watch ID and event, without raw output or command
 arguments. The default notify-send command replaces this watch's existing update

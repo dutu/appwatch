@@ -7,11 +7,12 @@ import os
 import re
 import signal
 from contextlib import ExitStack
+from datetime import UTC, datetime
 from threading import Event
 
 from app_watch.actions.worker import exec_worker
 from app_watch.config import PreparedWatch
-from app_watch.errors import BlockedError
+from app_watch.errors import BlockedError, StateError
 from app_watch.installation import MaintenanceBusy, software_guard
 from app_watch.notifications.events import notify_events
 from app_watch.notifications.notifier import NotificationConfig, build_notifier
@@ -19,6 +20,7 @@ from app_watch.process import PsutilProcessProvider
 from app_watch.services.async_controller import AsyncSystemdController
 from app_watch.services.monitor import require_monitor_identity
 from app_watch.services.systemd import RealSystemdController
+from app_watch.trigger.application import application_status
 from app_watch.trigger.locking import exclusive_lock, monitor_lock
 from app_watch.trigger.models import Receipt
 from app_watch.trigger.monitor import Monitor
@@ -87,6 +89,8 @@ def run_monitor(watch: PreparedWatch, *, expected_identity: str | None = None) -
                 timeout_ms=desktop.timeout_ms,
             )
         )
+        started = datetime.now(UTC)
+        previous_application = None
         try:
             for signum in (signal.SIGINT, signal.SIGTERM):
                 previous[signum] = signal.signal(signum, stop_monitor)
@@ -98,8 +102,13 @@ def run_monitor(watch: PreparedWatch, *, expected_identity: str | None = None) -
                             monitor_lock_path(watch.source_path).with_name("service.lock")
                         ),
                     ):
+                        previous_observation = monitor.state.last_observation
                         events = monitor.tick()
+                        fresh_observation = (
+                            monitor.state.last_observation is not previous_observation
+                        )
                 except BlockedError:
+                    fresh_observation = False
                     events = []  # A lifecycle command owns dispatch until its final safety check.
                 for event in events:
                     receipt = monitor.state.last_receipt
@@ -120,6 +129,21 @@ def run_monitor(watch: PreparedWatch, *, expected_identity: str | None = None) -
                         event.kind,
                         event.detail or watch.config.job.id,
                     )
+                if fresh_observation and desktop.trigger.enabled:
+                    try:
+                        application = application_status(
+                            monitor.state, monitor.store, watch, started
+                        )
+                    except (StateError, OSError, ValueError) as error:
+                        logger.warning("Application transition notification unavailable: %s", error)
+                    else:
+                        if previous_application is not None and previous_application != application:
+                            notifier.notify(
+                                "App-watch: Application state changed",
+                                f"{watch.config.job.id}: Application "
+                                f"{previous_application} → {application}",
+                            )
+                        previous_application = application
                 notify_events(notifier, watch, events)
                 stop.wait(watch.config.trigger.poll_seconds)
         finally:

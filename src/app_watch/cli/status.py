@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app_watch.config import PreparedWatch, load_config, prepare_config
+from app_watch.config import load_config, prepare_config
 from app_watch.config.identity import canonical_source
 from app_watch.errors import BlockedError, ConfigurationError, StateError
-from app_watch.process import Observation, boot_id
+from app_watch.process import boot_id
 from app_watch.services.monitor import (
     discovered_units,
     find_service,
@@ -16,50 +16,11 @@ from app_watch.services.monitor import (
     read_service,
     verify_loaded,
 )
+from app_watch.trigger.application import application_status
 from app_watch.trigger.inspect import inspect_recovery
 from app_watch.trigger.locking import lock_held, monitor_started_at
-from app_watch.trigger.models import InstanceState
 from app_watch.trigger.paths import monitor_lock_path
 from app_watch.trigger.state import StateStore
-
-
-def _application_status(
-    state: InstanceState, store: StateStore, watch: PreparedWatch, started: datetime
-) -> str:
-    """A stopped observation is distinct from a confirmed shutdown in this session."""
-    observation = state.last_observation
-    if observation.observation is not Observation.STOPPED:
-        return {
-            Observation.RUNNING: "RUNNING",
-            Observation.AMBIGUOUS: "AMBIGUOUS",
-            Observation.INSPECTION_UNAVAILABLE: "INSPECTION UNAVAILABLE",
-        }[observation.observation]
-    if state.candidate_since or state.pending_reconfirmation_required:
-        return "CONFIRMING STOP"
-    if state.armed:
-        return "UNKNOWN"  # Absence alone has not confirmed the armed lifecycle.
-    if state.latest_request_id:
-        request = state.pending_request
-        if request is None or request.request_id != state.latest_request_id:
-            request = None
-            attempts = ([state.active_attempt_id] if state.active_attempt_id else []) + list(
-                reversed(state.completed_attempts)
-            )
-            for attempt in attempts:
-                candidate = store.read_request(attempt)
-                if candidate is not None and candidate.request_id == state.latest_request_id:
-                    request = candidate
-                    break
-        if request is not None:
-            if request.scope != watch.scope or request.instance_id != state.instance_id:
-                raise StateError("Contradictory shutdown request ownership")
-            confirmed = datetime.fromisoformat(request.confirmed_at)
-            if (
-                request.config_fingerprint == state.config_fingerprint
-                and started <= confirmed <= datetime.fromisoformat(observation.observed_at)
-            ):
-                return "HAS STOPPED"
-    return "NOT RUNNING"
 
 
 def safe_text(value: object) -> str:
@@ -169,7 +130,7 @@ def watch_status(source: Path, *, runtime_params: dict[str, str] | None = None) 
             )
             result["details"]["observation_age_seconds"] = age
             if held and fresh and identity.scope == watch.scope:
-                result["application"] = _application_status(
+                result["application"] = application_status(
                     state, StateStore(Path(recovery["state_directory"])), watch, started
                 )
             elif result["monitor"].startswith("RUNNING"):
