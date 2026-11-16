@@ -70,8 +70,28 @@ Plain `{NAME}` substitution is supported in data-directory paths, script/JAR
 entrypoint paths, executable path predicates, environment-predicate values, and
 action arguments. Java class names, token predicates, and regexes are literal.
 Use `{{` and `}}` for literal braces in templated fields; attribute/index access,
-conversions, and format specifications are rejected. There are no implicit built-in
-placeholders. Substitution never invokes a shell.
+conversions, and format specifications are rejected. Substitution never invokes a
+shell.
+
+The built-in `{application.data_dir}` placeholder exposes the resolved, canonical
+absolute data-directory path, after runtime parameters and `~/` expansion. Use it
+in script/JAR entrypoint paths, executable path predicates, environment-predicate
+values, or action arguments (including the executable path). It cannot be used in
+`application.data_dir` itself or overridden through `trigger.params` or `--param`.
+This is a fixed lookup; other configuration-field references are not supported.
+The expanded path remains a single argument even when it contains spaces.
+
+```yaml
+application:
+  name: electrum
+  data_dir: ~/.electrum
+  matcher:
+    entrypoints:
+      - kind: script
+        value: /opt/electrum/run_electrum
+action:
+  argv: [/usr/bin/printf, '%s\n', '{application.data_dir}']
+```
 
 For example, with `action.argv: [/usr/bin/printf, '%s\n', '{NETWORK}']`:
 

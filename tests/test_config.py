@@ -225,6 +225,78 @@ def test_unused_params_rejected(document, tmp_path):
         )
 
 
+def test_data_dir_placeholder_uses_resolved_path(document, tmp_path):
+    directory = tmp_path / "wallet {literal} with spaces"
+    directory.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(directory, target_is_directory=True)
+    document["application"]["data_dir"] = str(tmp_path / "{WALLET}")
+    document["trigger"] = {"params": {"WALLET": "alias"}}
+    matcher = document["application"]["matcher"]
+    matcher["entrypoints"][0]["value"] = "{application.data_dir}/run_wallet"
+    matcher["exe_realpath"] = "{application.data_dir}/python"
+    matcher["env_eq"] = {"ELECTRUMDIR": "{application.data_dir}"}
+    matcher["argv_tokens"] = ["{application.data_dir}"]
+    document["action"]["argv"] += [
+        "{application.data_dir}",
+        "--source={application.data_dir}/wallet",
+        "{{application.data_dir}}",
+    ]
+    raw = validate_document(document)
+    prepared = prepare_config(raw, tmp_path / "job.yaml")
+    assert prepared.config.action.argv[-3:] == [
+        str(directory),
+        f"--source={directory}/wallet",
+        "{application.data_dir}",
+    ]
+    assert prepared.matcher.entrypoints[0].value == str(directory / "run_wallet")
+    assert prepared.matcher.exe_realpath == str(directory / "python")
+    assert prepared.matcher.env_eq == {"ELECTRUMDIR": str(directory)}
+    assert prepared.config.application.matcher.argv_tokens == ["{application.data_dir}"]
+    assert prepared.params == {"WALLET": "alias"}
+    assert prepared.identity.params == prepared.params
+    assert raw.action.argv[-3] == "{application.data_dir}"
+
+
+def test_data_dir_placeholder_in_action_executable(document, tmp_path):
+    executable = tmp_path / "python"
+    executable.symlink_to(sys.executable)
+    document["action"]["argv"][0] = "{application.data_dir}/python"
+    prepared = prepare_config(validate_document(document), tmp_path / "job.yaml")
+    assert prepared.config.action.argv[0] == str(executable)
+
+
+def test_data_dir_placeholder_expands_account_home(document, tmp_path):
+    document["application"]["data_dir"] = "~/.electrum"
+    document["action"]["argv"].append("{application.data_dir}")
+    prepared = prepare_config(
+        validate_document(document), tmp_path / "job.yaml", check_runtime=False
+    )
+    assert prepared.config.action.argv[-1] == str((prepared.home / ".electrum").resolve())
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{application.name}",
+        "{application.data_dir.parent}",
+        "{application.data_dir[0]}",
+        "{application.data_dir!s}",
+        "{application.data_dir:>5}",
+    ],
+)
+def test_data_dir_placeholder_rejects_other_lookups(document, tmp_path, template):
+    document["action"]["argv"].append(template)
+    with pytest.raises(ConfigurationError):
+        prepare_config(validate_document(document), tmp_path / "job.yaml")
+
+
+def test_data_dir_cannot_reference_itself(document, tmp_path):
+    document["application"]["data_dir"] = "/wallet/{application.data_dir}"
+    with pytest.raises(ConfigurationError, match="application.data_dir"):
+        prepare_config(validate_document(document), tmp_path / "job.yaml")
+
+
 def test_prepared_identity_and_fingerprint(document, tmp_path):
     path = tmp_path / "job.yaml"
     first = prepare_config(validate_document(document), path)

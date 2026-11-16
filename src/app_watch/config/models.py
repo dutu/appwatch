@@ -49,7 +49,11 @@ class StrictModel(BaseModel):
         return value
 
 
-def absolute_or_home(value: str) -> str:
+def absolute_or_home(value: str, *, allow_data_dir: bool = False) -> str:
+    if allow_data_dir and (
+        value == "{application.data_dir}" or value.startswith("{application.data_dir}/")
+    ):
+        return value
     if value != "~" and not value.startswith(("/", "~/")):
         raise ValueError("path must be absolute or start with ~/")
     return value
@@ -73,7 +77,7 @@ class EntrypointConfig(StrictModel):
             ):
                 raise ValueError("executable_name must be a literal basename")
         elif self.kind != "java_main":
-            absolute_or_home(self.value)
+            absolute_or_home(self.value, allow_data_dir=True)
         return self
 
 
@@ -89,7 +93,7 @@ class MatcherConfig(StrictModel):
     @field_validator("exe_realpath")
     @classmethod
     def executable_path(cls, value: str | None) -> str | None:
-        return absolute_or_home(value) if value is not None else None
+        return absolute_or_home(value, allow_data_dir=True) if value is not None else None
 
     @field_validator("cmdline_regex")
     @classmethod
@@ -150,7 +154,7 @@ class ActionConfig(StrictModel):
     def executable_path(cls, value: list[str]) -> list[str]:
         if not value[0] or value[0] == "~":
             raise ValueError("action.argv[0] must name an executable")
-        absolute_or_home(value[0])
+        absolute_or_home(value[0], allow_data_dir=True)
         return value
 
 

@@ -8,6 +8,7 @@ from app_watch.errors import ConfigurationError
 
 PARAMETER_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PARAMETER_VALUE = re.compile(r"^[A-Za-z0-9_.:@+-]+$")
+DATA_DIR_PLACEHOLDER = "application.data_dir"
 
 
 def parse_parameters(arguments: Sequence[str]) -> dict[str, str]:
@@ -27,15 +28,21 @@ def parse_parameters(arguments: Sequence[str]) -> dict[str, str]:
 
 
 def render(value: str, parameters: Mapping[str, str], used: set[str]) -> str:
-    """Allow simple named fields and escaped braces, never attributes or formatting."""
+    """Allow named parameters and the data-dir lookup, never attribute evaluation."""
     output: list[str] = []
     try:
         for literal, name, spec, conversion in Formatter().parse(value):
             output.append(literal)
             if name is None:
                 continue
-            if not PARAMETER_NAME.fullmatch(name) or spec or conversion:
-                raise ConfigurationError("Use plain {NAME} parameter placeholders only")
+            if (
+                (not PARAMETER_NAME.fullmatch(name) and name != DATA_DIR_PLACEHOLDER)
+                or spec
+                or conversion
+            ):
+                raise ConfigurationError(
+                    "Use plain {NAME} or {application.data_dir} placeholders only"
+                )
             if name not in parameters:
                 raise ConfigurationError(f"Missing runtime parameter: {name}")
             used.add(name)

@@ -15,7 +15,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 from app_watch.config.models import WatchConfig
-from app_watch.config.runtime import parse_parameters, render
+from app_watch.config.runtime import DATA_DIR_PLACEHOLDER, parse_parameters, render
 from app_watch.errors import ConfigurationError
 from app_watch.process import MatcherSpec, matcher_from_canonical
 
@@ -97,9 +97,10 @@ def prepare_config(
             parse_parameters([f"{key}={value}" for key, value in (runtime_params or {}).items()])
         )
         used: set[str] = set()
+        template_params = dict(params)
 
         def path(value: str, *, canonical: bool = True) -> str:
-            value = render(value, params, used)
+            value = render(value, template_params, used)
             if value == "~" or value.startswith("~/"):
                 value = account.pw_dir + value[1:]
             if not os.path.isabs(value):
@@ -110,6 +111,7 @@ def prepare_config(
         document = config.model_dump()
         app = document["application"]
         app["data_dir"] = path(app["data_dir"])
+        template_params[DATA_DIR_PLACEHOLDER] = app["data_dir"]
         matcher = app["matcher"]
         if matcher["exe_realpath"] is not None:
             matcher["exe_realpath"] = path(matcher["exe_realpath"])
@@ -118,11 +120,11 @@ def prepare_config(
                 entry["value"] = path(entry["value"])
         # Environment predicates compare literal process values, not canonical paths.
         matcher["env_eq"] = {
-            key: render(value, params, used) for key, value in matcher["env_eq"].items()
+            key: render(value, template_params, used) for key, value in matcher["env_eq"].items()
         }
         argv = document["action"]["argv"]
         argv[0] = path(argv[0], canonical=False)
-        argv[1:] = [render(value, params, used) for value in argv[1:]]
+        argv[1:] = [render(value, template_params, used) for value in argv[1:]]
         unused = set(params) - used
         if unused:
             raise ConfigurationError("Unused runtime parameters: " + ", ".join(sorted(unused)))
