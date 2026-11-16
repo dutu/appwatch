@@ -159,17 +159,50 @@ def test_fresh_install_starts_no_watches_and_reinstall_update_uninstall(installa
     assert not first.exists()  # All software releases are removed on uninstall.
 
 
-def test_dry_run_is_read_only_for_fresh_and_installed_tree(installation):
+def test_dry_run_is_read_only_for_fresh_and_installed_tree(installation, capsys):
     installer, _ = installation
     installer.execute("install", dry_run=True)
     assert not installer.layout.prefix.exists()
     assert installer.host.calls == []
+    output = capsys.readouterr().out
+    assert "Installation plan" in output
+    assert str(installer.layout.prefix) in output
+    assert "Result: dry run completed; no changes made" in output
+    assert "Result: INSTALLED" not in output
     installer.execute("install")
     before = installer.layout.manifest.read_bytes()
     selected = os.readlink(installer.layout.current)
     installer.execute("update", dry_run=True)
     assert installer.layout.manifest.read_bytes() == before
     assert os.readlink(installer.layout.current) == selected
+
+
+def test_install_output_explains_watch_setup(installation, capsys):
+    installer, _ = installation
+    installer.execute("install")
+    output = capsys.readouterr().out
+    assert "App-watch — Installation" in output
+    assert "Build and validation    OK (" in output
+    assert "Result: INSTALLED" in output
+    assert "Managed watches         0" in output
+    assert "without sudo" in output
+    assert f"{installer.layout.binary} --config /path/to/watch.yaml install" in output
+    assert f"Diagnostics: {installer.layout.prefix / 'install.log'}" in output
+
+
+def test_install_output_reports_failed_stage(installation, monkeypatch, capsys):
+    installer, _ = installation
+
+    def fail_build():
+        raise InstallError("simulated build failure")
+
+    monkeypatch.setattr(installer, "build_release", fail_build)
+    with pytest.raises(InstallError, match="simulated build failure"):
+        installer.execute("install")
+    output = capsys.readouterr().out
+    assert "Build and validation    FAILED (" in output
+    assert "Result: INSTALLED" not in output
+    assert not installer.layout.current.exists()
 
 
 @pytest.mark.parametrize("character", ["*", "?", "[", "]", "\\"])

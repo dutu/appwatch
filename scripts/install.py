@@ -22,7 +22,7 @@ import sys
 import tempfile
 import time
 import tomllib
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -44,6 +44,22 @@ SOURCE_PARTS = (
 
 class InstallError(RuntimeError):
     pass
+
+
+def report_field(label: str, value: object) -> None:
+    print(f"  {label:<23} {value}", flush=True)
+
+
+@contextmanager
+def report_stage(label: str):
+    started = time.monotonic()
+    report_field(label, "RUNNING")
+    try:
+        yield
+    except BaseException:
+        report_field(label, f"FAILED ({time.monotonic() - started:.1f}s)")
+        raise
+    report_field(label, f"OK ({time.monotonic() - started:.1f}s)")
 
 
 def acquire_install_lock(fd: int, *, timeout: float = 15.0) -> None:
@@ -977,6 +993,23 @@ class Installer:
     def execute(self, action: str, *, dry_run: bool = False, purge: bool = False) -> None:
         if action not in {"install", "update", "uninstall"} or (purge and action != "uninstall"):
             raise InstallError("Invalid installation action or purge option")
+        title = {"install": "Installation", "update": "Update", "uninstall": "Uninstallation"}
+        print(f"App-watch — {title[action]}\n", flush=True)
+        print(f"Source:    {self.source}", flush=True)
+        print(f"\n{title[action]} plan", flush=True)
+        report_field("Installation", self.layout.prefix)
+        report_field("Executable", self.layout.binary)
+        report_field("Worker template", self.layout.worker)
+        report_field("Existing user data", "preserved")
+        report_field(
+            "Watch monitors",
+            "remove managed services"
+            if action == "uninstall"
+            else "refresh existing; no new watches",
+        )
+        if purge:
+            report_field("Installer receipt", "remove")
+        print("\nChecking setup", flush=True)
         if action != "uninstall":
             self.host.check_platform()
             self.source_files()
@@ -999,10 +1032,7 @@ class Installer:
             if manifest and manifest["active_release"]:
                 helper = self.layout.prefix / "releases" / manifest["active_release"]
                 self.snapshots(helper, self.host.accounts(), validate_config=action != "uninstall")
-            print(
-                f"Would {action} App-watch at {self.layout.prefix}; "
-                "user configuration and recovery data remain preserved"
-            )
+            print("\nResult: dry run completed; no changes made", flush=True)
             return
         self.layout.prefix.mkdir(mode=0o755, parents=True, exist_ok=True)
         fd = os.open(
@@ -1017,8 +1047,10 @@ class Installer:
                 or info.st_mode & 0o022
             ):
                 raise InstallError("Installer lock is not safely owned")
-            acquire_install_lock(fd)
+            with report_stage("Deployment lock"):
+                acquire_install_lock(fd)
             self.host.log = self.layout.prefix / "install.log"
+            print(f"Diagnostics: {self.host.log}", flush=True)
             if interrupted is not None:
                 candidate = Path(interrupted["candidate"]) if interrupted.get("candidate") else None
                 if candidate is not None and self.source.is_relative_to(candidate):
@@ -1029,7 +1061,8 @@ class Installer:
                         target.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(path, target)
                     self.source = copied
-                self.recover(interrupted)
+                with report_stage("Interrupted transaction"):
+                    self.recover(interrupted)
                 manifest = self.read_json(self.layout.manifest)
             # Revalidate after taking the cross-process installation lock.
             if self.read_json(self.layout.manifest) != manifest:
@@ -1039,29 +1072,40 @@ class Installer:
                 if purge:
                     self.layout.manifest.unlink(missing_ok=True)
                     sync_dir(self.layout.prefix)
-                print("App-watch is uninstalled. User configuration and recovery data preserved.")
+                print("\nResult: UNINSTALLED", flush=True)
+                print("User configuration and recovery data preserved.", flush=True)
                 return
             if action == "update" and (manifest is None or manifest["active_release"] is None):
                 raise InstallError("update requires an active managed installation")
             accounts = self.host.accounts()
             if manifest and manifest["active_release"]:
                 old_helper = self.layout.prefix / "releases" / manifest["active_release"]
-                self.snapshots(old_helper, accounts, validate_config=action != "uninstall")
-            release = None
+                with report_stage("Existing watch checks"):
+                    self.snapshots(old_helper, accounts, validate_config=action != "uninstall")
+            release = version = None
             try:
                 if action != "uninstall":
-                    if manifest is None:
-                        self.host.provision()
-                    self.host.ensure_inspection_support()
-                    release = self.build_release()
+                    with report_stage("System dependencies"):
+                        if manifest is None:
+                            self.host.provision()
+                        self.host.ensure_inspection_support()
+                    with report_stage("Build and validation"):
+                        release = self.build_release()
+                        version = tomllib.loads((release / "src/pyproject.toml").read_text())[
+                            "project"
+                        ]["version"]
                 helper = release or self.layout.prefix / "releases" / manifest["active_release"]
                 snapshot_helper = helper
                 if manifest and manifest["active_release"]:
                     snapshot_helper = self.layout.prefix / "releases" / manifest["active_release"]
-                plans = self.snapshots(
-                    snapshot_helper, accounts, validate_config=action != "uninstall"
-                )
-                self.transaction(action, manifest, release, plans, purge=purge)
+                with report_stage("Watch safety checks"):
+                    plans = self.snapshots(
+                        snapshot_helper, accounts, validate_config=action != "uninstall"
+                    )
+                with report_stage(
+                    "Remove and refresh" if action == "uninstall" else "Activate and refresh"
+                ):
+                    self.transaction(action, manifest, release, plans, purge=purge)
             except BaseException:
                 current = self.read_json(self.layout.manifest)
                 if (
@@ -1071,7 +1115,26 @@ class Installer:
                 ):
                     shutil.rmtree(release)
                 raise
-            print(f"App-watch {action} complete. User configuration and recovery data preserved.")
+            result = {"install": "INSTALLED", "update": "UPDATED", "uninstall": "UNINSTALLED"}
+            print(f"\nResult: {result[action]}\n", flush=True)
+            if release is not None:
+                report_field("Version", version)
+                report_field("Executable", self.layout.binary)
+                report_field(
+                    "Previous release",
+                    "retained" if manifest and manifest["active_release"] else "none",
+                )
+            report_field("Managed watches", sum(len(item["plan"]["units"]) for item in plans))
+            print("\nUser configuration and recovery data preserved.", flush=True)
+            if action != "uninstall":
+                print(
+                    "New watches require setup as the application owner, without sudo:\n"
+                    f"  {self.layout.binary} --config /path/to/watch.yaml install\n"
+                    f"  {self.layout.binary} --config /path/to/watch.yaml status\n"
+                    f"  {self.layout.binary} --config /path/to/watch.yaml validate",
+                    flush=True,
+                )
+            print(f"Diagnostics: {self.host.log}", flush=True)
         finally:
             if saved_source is not None:
                 saved_source.cleanup()
@@ -1112,7 +1175,7 @@ def main() -> int:
         TypeError,
         AttributeError,
     ) as error:
-        print(f"Installation failed: {error}", file=sys.stderr)
+        print(f"Issue: {error}\n\nResult: FAILED", file=sys.stderr)
         return 1
     return 0
 
