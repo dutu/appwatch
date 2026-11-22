@@ -174,21 +174,9 @@ configuration parser does not gate an update. A dry-run checks the existing
 installation and runtime safety without building a release; configuration
 validation runs during the actual installation.
 
-To diagnose a configuration with new source before installing it, use a separate
-environment as the application owner, from a trusted checkout readable by that
-account:
-
-```sh
-check_env=$(mktemp -d /tmp/app-watch-validate.XXXXXXXX)
-python3 -m venv "$check_env"
-"$check_env/bin/python" -m pip install .
-"$check_env/bin/app-watch" --config ~/.config/app-watch/jobs/monero.yaml validate
-```
-
-Replace the config path and include the watch's `--param NAME=VALUE` options
-before `validate` if needed. This uses the checkout's configuration parser;
-service and monitoring health still reflect the installed release. It does not
-replace the managed installation or run the configured action.
+If validation fails, the installer reports the owner, job file, and reason
+without printing configuration values. Correct the reported issue and rerun the
+installer.
 
 A failed change rolls back only when no new work or operator edits make that
 unsafe. An interrupted transaction keeps a private journal and blocks runtime

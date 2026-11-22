@@ -39,6 +39,29 @@ from app_watch.trigger.paths import (
 from app_watch.trigger.state import StateStore, checked_id, private_directory
 
 
+class InvalidWatch(ConfigurationError):
+    def __init__(self, path: str, reason: str):
+        self.path = path
+        super().__init__(reason)
+
+
+def validate_watch(identity: WatchIdentity) -> None:
+    source = Path(identity.source_path)
+    try:
+        watch = prepare_config(load_config(source), source, runtime_params=identity.params)
+    except ConfigurationError as error:
+        reason = error.summary or "Configuration could not be validated"
+        raise InvalidWatch(identity.source_path, reason) from error
+    if not watch.config.trigger.enabled:
+        raise InvalidWatch(
+            identity.source_path, "trigger.enabled must be true for an installed watch"
+        )
+    if watch.scope != identity.scope:
+        raise InvalidWatch(
+            identity.source_path, "Job ID or effective parameters differ from the installed watch"
+        )
+
+
 def check_all_recovery() -> None:
     """Include orphan namespaces, even when no installed monitor references them."""
     root = state_root("0" * 16).parent
@@ -104,20 +127,7 @@ def snapshot(command: Path, *, validate_config: bool) -> dict:
         values = verify_loaded(installed)
         require_safe_stop(installed.identity)
         if validate_config:
-            try:
-                watch = prepare_config(
-                    load_config(Path(installed.identity.source_path)),
-                    Path(installed.identity.source_path),
-                    runtime_params=installed.identity.params,
-                )
-                if watch.scope != installed.identity.scope or not watch.config.trigger.enabled:
-                    raise ConfigurationError("Installed selection differs from configuration")
-            except ConfigurationError as error:
-                # Do not expose YAML/provider contents to the administrative transcript.
-                raise ConfigurationError(
-                    f"Configuration validation failed for {installed.identity.source_path}; "
-                    "run app-watch validate as its owner"
-                ) from error
+            validate_watch(installed.identity)
         lock = monitor_lock_path(Path(installed.identity.source_path))
         active = values.get("ActiveState")
         if active not in ("active", "activating", "reloading", "inactive", "failed"):
@@ -191,19 +201,7 @@ def validate_snapshot(
             raise BlockedError("Effective monitor ownership is unverified")
         require_safe_stop(identity)
         if config:
-            try:
-                watch = prepare_config(
-                    load_config(Path(identity.source_path)),
-                    Path(identity.source_path),
-                    runtime_params=identity.params,
-                )
-                if watch.scope != identity.scope or not watch.config.trigger.enabled:
-                    raise ConfigurationError("Configuration selection changed")
-            except ConfigurationError as error:
-                raise ConfigurationError(
-                    f"Configuration validation failed for {identity.source_path}; "
-                    "run app-watch validate as its owner"
-                ) from error
+            validate_watch(identity)
         item["after"] = render_service(identity, command)
 
 
@@ -271,7 +269,7 @@ def resume(plan: dict) -> None:
             systemctl("start", item["unit"])
 
 
-def main() -> int:
+def handle_request() -> dict:
     if os.geteuid() == 0:
         raise BlockedError("User maintenance must run as the non-root application owner")
     request = json.load(sys.stdin)
@@ -305,13 +303,21 @@ def main() -> int:
         resume(plan)
     else:
         raise BlockedError("Unknown maintenance request")
+    return plan
+
+
+def main() -> int:
+    try:
+        plan = handle_request()
+    except InvalidWatch as error:
+        print(json.dumps({"configuration_error": {"path": error.path, "reason": str(error)}}))
+        return 2
+    except (BlockedError, ConfigurationError, StateError, OSError, ValueError, KeyError) as error:
+        print(json.dumps({"error": str(error)}))
+        return 2
     print(json.dumps({"plan": plan}))
     return 0
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except (BlockedError, ConfigurationError, StateError, OSError, ValueError, KeyError) as error:
-        print(json.dumps({"error": str(error)}))
-        raise SystemExit(2) from None
+    raise SystemExit(main())

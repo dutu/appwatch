@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from app_watch import maintenance
-from app_watch.errors import BlockedError, ConfigurationError, StateError
+from app_watch.config import prepare_config, validate_document
 from app_watch.services import monitor as service
 from app_watch.trigger.models import InstanceState
 from app_watch.trigger.state import StateStore as StateStoreForTest
@@ -78,32 +78,34 @@ class ControlledHost(Host):
         if self.fail == request["action"]:
             self.fail = None
             raise InstallError("simulated user maintenance failure")
-        output = io.StringIO()
-        previous = sys.stdin
-        try:
-            sys.stdin = io.StringIO(json.dumps(dict(request, protocol_version=1)))
-            with redirect_stdout(output):
-                maintenance.main()
-        except (BlockedError, ConfigurationError, StateError, OSError) as error:
-            raise InstallError("account maintenance failed") from error
-        finally:
-            sys.stdin = previous
+        plan = super().user(release, account, request)
         if request["action"] == "resume" and self.after_resume:
             callback, self.after_resume = self.after_resume, None
             callback()
             raise InstallError("simulated failure after possible resume")
-        return json.loads(output.getvalue())["plan"]
+        return plan
 
 
 @pytest.fixture
 def installation(tmp_path, monkeypatch, manager):
+    subprocess_run = subprocess.run
+
+    def run_subprocess(argv, **kwargs):
+        if argv[0] != "runuser":
+            return subprocess_run(argv, **kwargs)
+        # Exercise the installer's transport while running maintenance against the fake manager.
+        output = io.StringIO()
+        with monkeypatch.context() as patch, redirect_stdout(output):
+            patch.setattr(sys, "stdin", io.StringIO(kwargs["input"]))
+            status = maintenance.main()
+        return subprocess.CompletedProcess(argv, status, output.getvalue(), "")
+
+    monkeypatch.setattr(subprocess, "run", run_subprocess)
     # Adapt the controlled user-manager fixture for installer stop/worker discovery.
     original = manager.run
 
     def run(argv, **kwargs):
         args = argv[2:]
-        import subprocess
-
         if args[0] == "list-jobs" or (
             args[0] == "list-units" and args[-1] == "app-watch-exec@*.service"
         ):
@@ -335,16 +337,73 @@ def test_replacement_validates_configuration_with_candidate_only(
     assert unit in manager.active
 
 
-def test_candidate_configuration_failure_precedes_monitor_pause(installation, watch):
+@pytest.mark.parametrize(
+    ("invalid", "reason"),
+    [
+        ("yaml", "Invalid YAML at line"),
+        ("duplicate_key", "Duplicate YAML key at line"),
+        ("extra_key", "application: Extra inputs are not permitted"),
+        ("env_key", "application.matcher.env_eq: Input should be a valid string"),
+        ("application", "Unsupported application name"),
+        ("executable", "action.argv[0] must name an available executable"),
+        ("parameter", "Missing runtime parameter"),
+        ("data_dir", "application.data_dir must exist and be owned by this user"),
+        ("disabled", "trigger.enabled must be true for an installed watch"),
+        ("selection", "Job ID or effective parameters differ from the installed watch"),
+    ],
+)
+def test_candidate_configuration_failure_precedes_monitor_pause(
+    installation, watch, capsys, invalid, reason
+):
     installer, manager = installation
     installer.execute("install")
+    private = "private-config-value"
+    document = watch.config.model_dump()
+    document["action"]["argv"].append("{saved}")
+    watch = prepare_config(
+        validate_document(document), watch.source_path, runtime_params={"saved": private}
+    )
     unit = add_watch(installer, watch)
     selected = installer.layout.current.resolve()
     releases = set(selected.parent.iterdir())
-    watch.source_path.write_text("bad: [")
+
+    if invalid == "yaml":
+        # The YAML exception normally includes the source line.
+        watch.source_path.write_text(f"job: [ {private} }}\n")
+    elif invalid == "duplicate_key":
+        watch.source_path.write_text(f"job: {private}\njob: {private}\n")
+    else:
+        if invalid == "extra_key":
+            document["application"][private] = private
+        elif invalid == "env_key":
+            document["application"]["matcher"]["env_eq"][private] = 42
+        elif invalid == "application":
+            document["application"]["name"] = private
+        elif invalid == "executable":
+            document["action"]["argv"][0] = f"{{application.data_dir}}/{private}"
+        elif invalid == "parameter":
+            document["action"]["argv"].append("{private_config_value}")
+        elif invalid == "data_dir":
+            document["application"]["data_dir"] = str(watch.source_path.parent / private)
+        elif invalid == "disabled":
+            document["trigger"]["enabled"] = False
+        elif invalid == "selection":
+            document["job"]["id"] = private
+        watch.source_path.write_text(json.dumps(document))
     manager.calls.clear()
-    with pytest.raises(InstallError):
+    with pytest.raises(InstallError) as failure:
         installer.execute("update")
+    installer.report.failure(failure.value, installer.host.log)
+    output = capsys.readouterr().err
+    assert "Account test-owner" in output
+    assert str(watch.source_path) in output
+    assert reason in output
+    assert private not in output
+    assert "private_config_value" not in output
+    transcript = installer.host.log.read_text()
+    assert reason in transcript
+    assert private not in transcript
+    assert "private_config_value" not in transcript
     assert installer.report.failed_stage == "Release activation"
     assert installer.layout.current.resolve() == selected
     assert set(selected.parent.iterdir()) == releases

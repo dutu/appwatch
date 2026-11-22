@@ -47,6 +47,12 @@ class InstallError(RuntimeError):
     pass
 
 
+class CommandFailed(InstallError):
+    def __init__(self, result: subprocess.CompletedProcess[str]):
+        super().__init__(f"{Path(result.args[0]).name} failed (exit {result.returncode})")
+        self.stdout = result.stdout
+
+
 class InstallReport:
     """VaultKeep's console format, without changing deployment or log storage."""
 
@@ -307,7 +313,12 @@ class Host:
     log: Path | None = None
 
     def run(
-        self, argv: list[str], *, input_text: str | None = None, env: dict | None = None
+        self,
+        argv: list[str],
+        *,
+        input_text: str | None = None,
+        env: dict | None = None,
+        log_success_stdout: bool = True,
     ) -> str:
         environment = dict(os.environ if env is None else env)
         for name in (
@@ -347,10 +358,11 @@ class Host:
                 env=environment,
             )
             if transcript is not None:
-                transcript.write(json.dumps(argv) + "\n" + result.stdout + result.stderr + "\n")
+                stdout = result.stdout if log_success_stdout or result.returncode else ""
+                transcript.write(json.dumps(argv) + "\n" + stdout + result.stderr + "\n")
         if result.returncode:
             # Tool/provider output can contain user values. Do not publish it here.
-            raise InstallError(f"{Path(argv[0]).name} failed (exit {result.returncode})")
+            raise CommandFailed(result)
         return result.stdout
 
     def check_platform(self) -> None:
@@ -506,9 +518,31 @@ class Host:
             [str(release / "venv/bin/python"), "-I", "-m", "app_watch.maintenance"],
         )
         try:
-            document = json.loads(self.run(argv, input_text=json.dumps(request)))
+            # Successful replies contain the full watch plan, including parameters.
+            document = json.loads(
+                self.run(argv, input_text=json.dumps(request), log_success_stdout=False)
+            )
             return document["plan"]
         except (ValueError, KeyError, InstallError) as error:
+            if isinstance(error, CommandFailed) and request["action"] == "validate":
+                try:
+                    issue = json.loads(error.stdout)["configuration_error"]
+                    path, reason = issue["path"], issue["reason"]
+                except (ValueError, KeyError, TypeError):
+                    pass  # Older helpers report an unstructured error.
+                else:
+                    if (
+                        isinstance(reason, str)
+                        and reason.isprintable()
+                        and any(
+                            path == unit["identity"]["source_path"]
+                            for unit in request["plan"]["units"]
+                        )
+                    ):
+                        raise InstallError(
+                            f"Account {account['name']}: configuration validation failed for "
+                            f"{path!r}: {reason}"
+                        ) from error
             raise InstallError(
                 f"Account {account['name']}: maintenance {request['action']} failed; "
                 "inspect its watches as their owner"

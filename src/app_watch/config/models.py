@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from app_watch.apps.registry import get_adapter
+from app_watch.errors import ConfigurationError
 
 type NonEmpty = Annotated[str, StringConstraints(min_length=1)]
 type Seconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
@@ -30,11 +31,11 @@ class StrictModel(BaseModel):
 
         def inspect(item: object) -> None:
             if isinstance(item, str) and "\0" in item:
-                raise ValueError("NUL characters are not allowed")
+                raise ConfigurationError.with_summary("NUL characters are not allowed")
             if isinstance(item, (dict, list)):
                 identity = id(item)
                 if identity in active:
-                    raise ValueError("Recursive YAML aliases are not allowed")
+                    raise ConfigurationError.with_summary("Recursive YAML aliases are not allowed")
                 active.add(identity)
                 if isinstance(item, dict):
                     for key, child in item.items():
@@ -55,7 +56,7 @@ def absolute_or_home(value: str, *, allow_data_dir: bool = False) -> str:
     ):
         return value
     if value != "~" and not value.startswith(("/", "~/")):
-        raise ValueError("path must be absolute or start with ~/")
+        raise ConfigurationError.with_summary("path must be absolute or start with ~/")
     return value
 
 
@@ -75,7 +76,7 @@ class EntrypointConfig(StrictModel):
                 or any(char in self.value for char in "/\\*?[]{}")
                 or any(char.isspace() or not char.isprintable() for char in self.value)
             ):
-                raise ValueError("executable_name must be a literal basename")
+                raise ConfigurationError.with_summary("executable_name must be a literal basename")
         elif self.kind != "java_main":
             absolute_or_home(self.value, allow_data_dir=True)
         return self
@@ -102,14 +103,16 @@ class MatcherConfig(StrictModel):
             try:
                 re.compile(value)
             except re.error as error:
-                raise ValueError(f"invalid process regex: {error}") from error
+                raise ConfigurationError.with_summary(
+                    "invalid process regex", detail=f"invalid process regex: {error}"
+                ) from error
         return value
 
     @model_validator(mode="after")
     def unique_entrypoints(self) -> MatcherConfig:
         identities = [(item.kind, item.value) for item in self.entrypoints]
         if len(identities) != len(set(identities)):
-            raise ValueError("matcher entrypoints must be unique")
+            raise ConfigurationError.with_summary("matcher entrypoints must be unique")
         return self
 
 
@@ -132,17 +135,24 @@ class ApplicationConfig(StrictModel):
                 ("executable_name", "monero-wallet-gui"),
                 ("executable_name", "monero-wallet-rpc"),
             }:
-                raise ValueError("Monero requires GUI and RPC executable_name entrypoints")
+                raise ConfigurationError.with_summary(
+                    "Monero requires GUI and RPC executable_name entrypoints"
+                )
             if (
                 self.matcher.exe_realpath is not None
                 or self.matcher.argv_tokens
                 or self.matcher.cmdline_regex is not None
                 or self.matcher.env_eq
             ):
-                raise ValueError("Monero matcher must not narrow the shared process guard")
+                raise ConfigurationError.with_summary(
+                    "Monero matcher must not narrow the shared process guard"
+                )
         unknown = set(self.matcher.env_eq) - adapter.env_keys
         if unknown:
-            raise ValueError("unsupported matcher environment keys: " + ", ".join(sorted(unknown)))
+            raise ConfigurationError.with_summary(
+                "unsupported matcher environment keys",
+                detail="unsupported matcher environment keys: " + ", ".join(sorted(unknown)),
+            )
         return self
 
 
@@ -153,7 +163,7 @@ class ActionConfig(StrictModel):
     @classmethod
     def executable_path(cls, value: list[str]) -> list[str]:
         if not value[0] or value[0] == "~":
-            raise ValueError("action.argv[0] must name an executable")
+            raise ConfigurationError.with_summary("action.argv[0] must name an executable")
         absolute_or_home(value[0], allow_data_dir=True)
         return value
 
@@ -201,7 +211,7 @@ class ExternalNotifier(StrictModel):
             or value.endswith("/")
             or value.startswith("-")
         ):
-            raise ValueError(
+            raise ConfigurationError.with_summary(
                 "Must be one executable name or absolute path, without shell syntax or arguments."
             )
         return value
@@ -226,5 +236,5 @@ class WatchConfig(StrictModel):
     @classmethod
     def version_integer(cls, value: object) -> object:
         if type(value) is not int:
-            raise ValueError("config_version must be an integer")
+            raise ConfigurationError.with_summary("config_version must be an integer")
         return value

@@ -12,7 +12,8 @@ from pathlib import Path
 
 from pydantic import ValidationError
 from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError
+from ruamel.yaml.constructor import DuplicateKeyError
+from ruamel.yaml.error import MarkedYAMLError, YAMLError
 
 from app_watch.config.models import WatchConfig
 from app_watch.config.runtime import (
@@ -29,13 +30,35 @@ def validate_document(document: object) -> WatchConfig:
     try:
         return WatchConfig.model_validate(document)
     except RecursionError as error:
-        raise ConfigurationError("Configuration nesting is too deep") from error
+        raise ConfigurationError.with_summary("Configuration nesting is too deep") from error
     except ValidationError as error:
+        issues = error.errors(include_url=False, include_input=False)
         messages = []
-        for issue in error.errors(include_url=False, include_input=False, include_context=False):
+        for issue in issues:
             path = ".".join(str(part) for part in issue["loc"]) or "configuration"
             messages.append(f"{path}: {issue['msg']}")
-        raise ConfigurationError("\n".join(messages)) from error
+
+        # Show the first issue to the installer. Extra fields and keys inside the
+        # two free-form mappings come from YAML, so omit them from the location.
+        issue = issues[0]
+        location = issue["loc"]
+        if issue["type"] in ("extra_forbidden", "invalid_key"):
+            location = location[:-1]
+        for mapping in (("trigger", "params"), ("application", "matcher", "env_eq")):
+            if location[: len(mapping)] == mapping:
+                location = mapping
+                break
+        path = ".".join(str(part) for part in location) or "configuration"
+        cause = issue.get("ctx", {}).get("error")
+        if isinstance(cause, ConfigurationError) and cause.summary:
+            summary = cause.summary
+        elif issue["type"] in ("value_error", "assertion_error"):
+            summary = "Invalid setting"
+        else:
+            summary = issue["msg"]
+        raise ConfigurationError.with_summary(
+            f"{path}: {summary}", detail="\n".join(messages)
+        ) from error
 
 
 def load_config(path: Path) -> WatchConfig:
@@ -45,8 +68,24 @@ def load_config(path: Path) -> WatchConfig:
     try:
         with path.open(encoding="utf-8") as stream:
             document = yaml.load(stream)
-    except (OSError, UnicodeError, YAMLError, RecursionError) as error:
-        raise ConfigurationError(f"Cannot load {path}: {error}") from error
+    except (OSError, YAMLError, ValueError, OverflowError, RecursionError) as error:
+        if isinstance(error, UnicodeError):
+            summary = "Configuration must be UTF-8"
+        elif isinstance(error, RecursionError):
+            summary = "Configuration nesting is too deep"
+        elif isinstance(error, OSError):
+            summary = "Configuration file is missing or unreadable"
+        else:
+            if isinstance(error, DuplicateKeyError):
+                summary = "Duplicate YAML key"
+            else:
+                summary = "Invalid YAML"
+            if isinstance(error, MarkedYAMLError) and error.problem_mark is not None:
+                mark = error.problem_mark
+                summary += f" at line {mark.line + 1}, column {mark.column + 1}"
+        raise ConfigurationError.with_summary(
+            summary, detail=f"Cannot load {path}: {error}"
+        ) from error
     return validate_document(document)
 
 
@@ -96,7 +135,7 @@ def prepare_config(
     try:
         account = pwd.getpwuid(os.geteuid())
         if not os.path.isabs(account.pw_dir):
-            raise ConfigurationError("Account home must be absolute")
+            raise ConfigurationError.with_summary("Account home must be absolute")
         params = dict(config.trigger.params)
         params.update(
             parse_parameters([f"{key}={value}" for key, value in (runtime_params or {}).items()])
@@ -109,7 +148,7 @@ def prepare_config(
             if value == "~" or value.startswith("~/"):
                 value = account.pw_dir + value[1:]
             if not os.path.isabs(value):
-                raise ConfigurationError("Prepared paths must be absolute")
+                raise ConfigurationError.with_summary("Prepared paths must be absolute")
             # Executable symlinks can select an environment (e.g. venv Python).
             return str(Path(value).resolve()) if canonical else value
 
@@ -133,17 +172,23 @@ def prepare_config(
         argv[1:] = [render(value, template_params, used) for value in argv[1:]]
         unused = set(params) - used
         if unused:
-            raise ConfigurationError("Unused runtime parameters: " + ", ".join(sorted(unused)))
+            raise ConfigurationError.with_summary(
+                "Unused runtime parameters",
+                detail="Unused runtime parameters: " + ", ".join(sorted(unused)),
+            )
         effective = validate_document(document)
         if check_runtime:
             directory = Path(app["data_dir"])
             if not directory.is_dir() or directory.stat().st_uid != account.pw_uid:
-                raise ConfigurationError(
+                raise ConfigurationError.with_summary(
                     "application.data_dir must exist and be owned by this user"
                 )
             executable = Path(argv[0])
             if not executable.is_file() or not os.access(executable, os.X_OK):
-                raise ConfigurationError(f"Action executable is unavailable: {executable}")
+                raise ConfigurationError.with_summary(
+                    "action.argv[0] must name an available executable",
+                    detail=f"Action executable is unavailable: {executable}",
+                )
         return PreparedWatch(
             effective,
             source.resolve(),
@@ -153,4 +198,7 @@ def prepare_config(
             matcher_from_canonical(matcher),
         )
     except (KeyError, OSError, RuntimeError) as error:
-        raise ConfigurationError(f"Cannot prepare watch: {error}") from error
+        raise ConfigurationError.with_summary(
+            "Cannot resolve or access a configured path",
+            detail=f"Cannot prepare watch: {error}",
+        ) from error
