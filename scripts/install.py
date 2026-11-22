@@ -1142,7 +1142,13 @@ class Installer:
         if dry_run:
             if manifest and manifest["active_release"]:
                 helper = self.layout.prefix / "releases" / manifest["active_release"]
-                self.snapshots(helper, self.host.accounts(), validate_config=action != "uninstall")
+                self.snapshots(helper, self.host.accounts(), validate_config=False)
+            if action != "uninstall":
+                print(
+                    "Configuration validation requires the staged release "
+                    "and runs during installation.",
+                    flush=True,
+                )
             print("\nResult: dry run completed; no changes made", flush=True)
             return
         if action != "uninstall":
@@ -1196,7 +1202,10 @@ class Installer:
             if manifest and manifest["active_release"]:
                 old_helper = self.layout.prefix / "releases" / manifest["active_release"]
                 with self.report.stage("Safety checks"):
-                    self.snapshots(old_helper, accounts, validate_config=action != "uninstall")
+                    # The installed parser may reject configuration supported by the candidate.
+                    # Keep its runtime safety checks; validate configuration with the new code
+                    # under service locks in transaction(), before pausing any monitors.
+                    self.snapshots(old_helper, accounts, validate_config=False)
             release = None
             try:
                 if action != "uninstall":
@@ -1211,9 +1220,7 @@ class Installer:
                 if manifest and manifest["active_release"]:
                     snapshot_helper = self.layout.prefix / "releases" / manifest["active_release"]
                 with self.report.stage("Runtime safety checks"):
-                    plans = self.snapshots(
-                        snapshot_helper, accounts, validate_config=action != "uninstall"
-                    )
+                    plans = self.snapshots(snapshot_helper, accounts, validate_config=False)
                 with self.report.stage(
                     "Uninstallation" if action == "uninstall" else "Release activation"
                 ):

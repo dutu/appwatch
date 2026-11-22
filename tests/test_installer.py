@@ -305,6 +305,54 @@ def test_preflight_rejects_invalid_or_protected_watches(installation, watch, inv
     assert not installer.layout.journal.exists()
 
 
+@pytest.mark.parametrize("action", ["install", "update"])
+def test_replacement_validates_configuration_with_candidate_only(
+    installation, watch, monkeypatch, action, capsys
+):
+    installer, manager = installation
+    installer.execute("install")
+    unit = add_watch(installer, watch)
+    old_release = installer.layout.current.resolve()
+    original = installer.host.user
+    validations = []
+
+    def user(release, account, request):
+        if request["action"] in ("snapshot", "validate") and request.get("validate_config", True):
+            validations.append(release)
+            if release == old_release:
+                raise InstallError("old code rejects configuration supported by new code")
+        return original(release, account, request)
+
+    monkeypatch.setattr(installer.host, "user", user)
+    installer.execute(action, dry_run=True)
+    assert not validations
+    assert "Configuration validation requires the staged release" in capsys.readouterr().out
+    assert installer.layout.current.resolve() == old_release
+    installer.execute(action)
+    candidate = installer.layout.current.resolve()
+    assert candidate != old_release
+    assert validations == [candidate, candidate]
+    assert unit in manager.active
+
+
+def test_candidate_configuration_failure_precedes_monitor_pause(installation, watch):
+    installer, manager = installation
+    installer.execute("install")
+    unit = add_watch(installer, watch)
+    selected = installer.layout.current.resolve()
+    releases = set(selected.parent.iterdir())
+    watch.source_path.write_text("bad: [")
+    manager.calls.clear()
+    with pytest.raises(InstallError):
+        installer.execute("update")
+    assert installer.report.failed_stage == "Release activation"
+    assert installer.layout.current.resolve() == selected
+    assert set(selected.parent.iterdir()) == releases
+    assert unit in manager.active
+    assert not any(call[0] == "stop" for call in manager.calls)
+    assert not installer.layout.journal.exists()
+
+
 @pytest.mark.parametrize("resource", ["release", "command", "template", "inspector", "sudoers"])
 def test_modified_managed_files_are_preserved(installation, resource):
     installer, _ = installation
