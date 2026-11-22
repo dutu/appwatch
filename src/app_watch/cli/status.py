@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from unicodedata import category, east_asian_width
 
 from app_watch.config import load_config, prepare_config
 from app_watch.config.identity import canonical_source
@@ -189,8 +190,16 @@ def print_status(result: dict, *, verbose: bool = False) -> None:
             print(f"{key}: {safe_text(value)}")
 
 
+def _column_width(value: str) -> int:
+    return sum(
+        2 if east_asian_width(char) in {"W", "F"} else 1
+        for char in value
+        if category(char) not in {"Mn", "Me"}
+    )
+
+
 def print_inventory(rows: list[dict]) -> None:
-    print("Watch\tConfiguration\tMonitor\tApplication\tAction")
+    table = [(["Watch", "Configuration", "Monitor", "Application", "Action"], [])]
     for row in rows:
         fields = [
             row.get("job_id") or row["config"],
@@ -199,8 +208,17 @@ def print_inventory(rows: list[dict]) -> None:
             row.get("application", "UNKNOWN"),
             row.get("dispatch", "UNKNOWN"),
         ]
-        print("\t".join(safe_text(value) for value in fields))
-        for diagnostic in row["diagnostics"]:
+        table.append(([safe_text(value) for value in fields], row["diagnostics"]))
+
+    columns = zip(*(fields for fields, _ in table), strict=True)
+    widths = [max(map(_column_width, column)) for column in columns]
+    for fields, diagnostics in table:
+        padded = [
+            value + " " * (width - _column_width(value))
+            for value, width in zip(fields[:-1], widths[:-1], strict=True)
+        ]
+        print("  ".join([*padded, fields[-1]]))
+        for diagnostic in diagnostics:
             print("  " + safe_text(diagnostic))
     if not rows:
         print("No watches found.")

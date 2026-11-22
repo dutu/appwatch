@@ -111,9 +111,43 @@ def test_flat_monitor_passes_pinned_identity(watch, monkeypatch):
     assert kwargs == {"expected_identity": watch.scope}
 
 
-def test_list_needs_no_options(monkeypatch):
+def test_list_needs_no_options(monkeypatch, capsys):
     monkeypatch.setattr("app_watch.cli.status.inventory", lambda: [])
     assert main(["list"]) == 0
+    assert capsys.readouterr().out == (
+        "Watch  Configuration  Monitor  Application  Action\nNo watches found.\n"
+    )
+
+
+def test_list_aligns_inventory_columns(monkeypatch, capsys):
+    job_id = "monero_2026-11-11-error_sd7_nas-restic_full"
+    rows = [
+        {
+            "job_id": job_id,
+            "configuration": "VALID",
+            "monitor": "RUNNING",
+            "application": "NOT RUNNING",
+            "dispatch": "IDLE",
+            "diagnostics": [],
+        },
+        {
+            "config": "/jobs/世界e\u0301\t.yaml",
+            "configuration": "INVALID",
+            "monitor": "NOT INSTALLED",
+            "diagnostics": ["Invalid config"],
+        },
+    ]
+    monkeypatch.setattr("app_watch.cli.status.inventory", lambda: rows)
+    assert main(["list"]) == 0
+    watch_width = len(job_id)
+    config = "/jobs/世界e\u0301\\t.yaml"
+    config_padding = " " * (watch_width - len(config) - 1)  # Two wide chars and one accent.
+    assert capsys.readouterr().out.splitlines() == [
+        f"{'Watch':<{watch_width}}  Configuration  Monitor        Application  Action",
+        f"{job_id}  VALID          RUNNING        NOT RUNNING  IDLE",
+        f"{config}{config_padding}  INVALID        NOT INSTALLED  UNKNOWN      UNKNOWN",
+        "  Invalid config",
+    ]
 
 
 def test_generated_monitor_uses_flat_command(watch):

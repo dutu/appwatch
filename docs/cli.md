@@ -84,7 +84,7 @@ application is `UNKNOWN`.
 `list` scans `*.yaml` and `*.yml` under the user's App-watch jobs directory and
 includes managed services for other paths, including missing configs. Bad YAML,
 symlink loops and discovery errors remain visible alongside other entries.
-Columns show watch, config validity, monitor, application and dispatch state.
+Aligned columns show watch, config validity, monitor, application and dispatch state.
 Manager unavailability does not hide locally discoverable watches.
 
 `status` and `list` return zero when the report is produced; unhealthy states are
