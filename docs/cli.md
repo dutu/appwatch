@@ -27,7 +27,7 @@ disable colors, for example `app-watch --no-color --config watch.yaml install`.
 | `remove` | Stop, disable and remove an installed monitor; preserve recovery state. |
 | `notify ARGUMENTS...` | Pass all remaining arguments literally to the configured external notifier; see [notifications](notifications.md). |
 
-The internal worker service entry point is not an operator replay interface.
+Systemd invokes the internal worker entry point, which is hidden from CLI help.
 There are no backup, archive, retention, verification, manual action-run or
 scheduling commands.
 

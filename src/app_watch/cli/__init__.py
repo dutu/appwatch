@@ -61,11 +61,13 @@ def create_parser() -> argparse.ArgumentParser:
     )
     monitor = commands.add_parser("monitor", help="monitor one watch in the foreground")
     monitor.add_argument("--expected-identity", help=argparse.SUPPRESS)
-    worker = commands.add_parser("exec-worker", help="internal worker service entry point")
-    worker.add_argument("selection")
     for action in ("install", "update", "disable", "remove"):
         help_text = f"{action} this watch's user monitor service"
         commands.add_parser(action, help=help_text, description=help_text)
+    # Set the displayed choices before registering the systemd worker.
+    commands.metavar = "{" + ",".join(commands.choices) + "}"
+    worker = commands.add_parser("exec-worker")
+    worker.add_argument("selection")
     return parser
 
 

@@ -26,6 +26,7 @@ def test_help_describes_current_account_and_flat_commands():
     assert "current account" in help_text
     assert "--user" not in help_text
     assert "trigger" not in help_text
+    assert "exec-worker" not in help_text
     assert "install this watch's user monitor service" in help_text
 
 
