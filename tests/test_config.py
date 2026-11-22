@@ -363,3 +363,76 @@ def test_cli_requires_config(command, capsys):
         main([command])
     assert error.value.code == 2
     assert "--config is required" in capsys.readouterr().err
+
+
+def test_job_id_placeholder_in_action_arguments(document, tmp_path):
+    document["action"]["argv"] += [
+        "{job.id}",
+        "--repository={job.id}",
+        "{application.data_dir}",
+        "{{job.id}}",
+    ]
+    raw = validate_document(document)
+    prepared = prepare_config(raw, tmp_path / "job.yaml")
+    assert prepared.config.action.argv[-4:] == [
+        "electrum-main",
+        "--repository=electrum-main",
+        str(tmp_path.resolve()),
+        "{job.id}",
+    ]
+    assert prepared.params == {}
+    assert prepared.identity.params == {}
+    assert raw.action.argv[-4] == "{job.id}"
+    document["job"]["id"] = "electrum-other"
+    changed = prepare_config(validate_document(document), tmp_path / "job.yaml")
+    assert changed.config.action.argv[-4] == "electrum-other"
+
+
+def test_job_id_placeholder_in_action_executable(document, tmp_path):
+    executable = tmp_path / document["job"]["id"]
+    executable.symlink_to(sys.executable)
+    document["action"]["argv"][0] = str(tmp_path / "{job.id}")
+    prepared = prepare_config(validate_document(document), tmp_path / "job.yaml")
+    assert prepared.config.action.argv[0] == str(executable)
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{job.name}",
+        "{job.id.upper}",
+        "{job.id[0]}",
+        "{job.id!s}",
+        "{job.id:>5}",
+    ],
+)
+def test_job_id_placeholder_rejects_other_lookups(document, tmp_path, template):
+    document["action"]["argv"].append(template)
+    with pytest.raises(ConfigurationError):
+        prepare_config(validate_document(document), tmp_path / "job.yaml")
+
+
+@pytest.mark.parametrize("field", ["data_dir", "entrypoint"])
+def test_job_id_placeholder_is_only_available_in_action(document, tmp_path, field):
+    if field == "data_dir":
+        document["application"]["data_dir"] = str(tmp_path / "{job.id}")
+    else:
+        document["application"]["matcher"]["entrypoints"][0]["value"] = "/opt/{job.id}"
+    with pytest.raises(ConfigurationError, match="Missing runtime parameter: job.id"):
+        prepare_config(validate_document(document), tmp_path / "job.yaml")
+
+
+@pytest.mark.parametrize("name", ["job.id", "application.data_dir"])
+@pytest.mark.parametrize("via_cli", [False, True])
+def test_builtin_placeholders_cannot_be_overridden(document, tmp_path, name, via_cli):
+    if via_cli:
+        with pytest.raises(ConfigurationError):
+            prepare_config(
+                validate_document(document),
+                tmp_path / "job.yaml",
+                runtime_params={name: "override"},
+            )
+    else:
+        document["trigger"] = {"params": {name: "override"}}
+        with pytest.raises(ConfigurationError):
+            validate_document(document)

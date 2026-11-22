@@ -78,8 +78,13 @@ absolute data-directory path, after runtime parameters and `~/` expansion. Use i
 in script/JAR entrypoint paths, executable path predicates, environment-predicate
 values, or action arguments (including the executable path). It cannot be used in
 `application.data_dir` itself or overridden through `trigger.params` or `--param`.
-This is a fixed lookup; other configuration-field references are not supported.
 The expanded path remains a single argument even when it contains spaces.
+
+The built-in `{job.id}` placeholder exposes the configured job ID in action
+arguments, including the executable path. It is unavailable in application and
+matcher fields and cannot be overridden through `trigger.params` or `--param`.
+Both built-ins are fixed lookups; other configuration-field references, attribute
+access, indexing, conversions, and format specifications remain unsupported.
 
 ```yaml
 application:
@@ -90,7 +95,7 @@ application:
       - kind: script
         value: /opt/electrum/run_electrum
 action:
-  argv: [/usr/bin/printf, '%s\n', '{application.data_dir}']
+  argv: [/usr/bin/printf, '%s\n', '{job.id}', '{application.data_dir}']
 ```
 
 For example, with `action.argv: [/usr/bin/printf, '%s\n', '{NETWORK}']`:

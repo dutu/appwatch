@@ -15,7 +15,12 @@ from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 from app_watch.config.models import WatchConfig
-from app_watch.config.runtime import DATA_DIR_PLACEHOLDER, parse_parameters, render
+from app_watch.config.runtime import (
+    DATA_DIR_PLACEHOLDER,
+    JOB_ID_PLACEHOLDER,
+    parse_parameters,
+    render,
+)
 from app_watch.errors import ConfigurationError
 from app_watch.process import MatcherSpec, matcher_from_canonical
 
@@ -122,6 +127,7 @@ def prepare_config(
         matcher["env_eq"] = {
             key: render(value, template_params, used) for key, value in matcher["env_eq"].items()
         }
+        template_params[JOB_ID_PLACEHOLDER] = config.job.id
         argv = document["action"]["argv"]
         argv[0] = path(argv[0], canonical=False)
         argv[1:] = [render(value, template_params, used) for value in argv[1:]]
